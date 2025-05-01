@@ -1,8 +1,13 @@
-" ~/.vimrc — Clean and Functional Starter Config
+if has("syntax")
+  syntax on
+endif
+
+if has("autocmd")
+  au BufReadPost * if line("'\"") > 1 && line("'\"") <= line("$") | exe "normal! g'\"" | endif
+endif
 
 " BASIC UI
 set number              " Show line numbers
-set relativenumber      " Relative line numbers (great for jumping with motions)
 set ruler               " Show cursor position
 set showcmd             " Show incomplete commands
 set cursorline          " Highlight current line
@@ -34,7 +39,6 @@ set ignorecase          " Case-insensitive search...
 set smartcase           " ... unless search includes uppercase
 set incsearch           " Show matches as you type
 set hlsearch            " Highlight matches
-nnoremap <Esc> :nohlsearch<CR> " Clear highlights on Escape
 
 " TABS AND SPACES
 set backspace=indent,eol,start " Make backspace behave more like other editors
@@ -44,18 +48,12 @@ filetype plugin indent on
 syntax on
 
 " COLORSCHEME
-set termguicolors
-colorscheme desert      " Change to 'elflord', 'murphy', etc., or install one
+" set termguicolors
+" colorscheme desert      " Change to 'elflord', 'murphy', etc., or install one
 
 " VISUALS
 set scrolloff=5         " Keep cursor 5 lines from top/bottom
-set signcolumn=yes      " Always show signcolumn (useful with Git plugins)
+" set signcolumn=yes      " Always show signcolumn (useful with Git plugins)
 
 " STATUSLINE (basic)
 set statusline=%f\ %y\ %m\ %r%=%-14.(%l,%c%V%)\ %P
-
-" CLIPBOARD (use system clipboard if available)
-if has("clipboard")
-  set clipboard=unnamedplus
-endif
-

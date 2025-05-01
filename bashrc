@@ -121,30 +121,34 @@ export TMOUT=0
 function __ssh_agent() {
     local agent_file="$HOME/.ssh-agent"
 
-    # Test current agent
+    # Check if agent is alive
     ssh-add -l >/dev/null 2>&1
     local result=$?
 
     if [ $result -eq 2 ]; then
-        # Agent unavailable – try restoring from file
-        [ -r "$agent_file" ] && source "$agent_file" >/dev/null
-        ssh-add -l >/dev/null 2>&1
-        result=$?
-
-        if [ $result -eq 2 ]; then
-            # Still no agent – start a new one
-            eval "$(ssh-agent -s)" > "$agent_file"
-            source "$agent_file" >/dev/null
+        # Try restoring agent info
+        if [ -f "$agent_file" ]; then
+            source "$agent_file" >/dev/null 2>&1
             ssh-add -l >/dev/null 2>&1
             result=$?
         fi
+
+        # Still broken? Start fresh agent
+        if [ $result -eq 2 ]; then
+            echo "Starting new ssh-agent..."
+            local agent_output
+            agent_output="$(ssh-agent -s)"
+            echo "$agent_output" > "$agent_file"
+            eval "$agent_output"
+        fi
     fi
 
-    if [ $result -eq 1 ]; then
-        # Agent is running but no keys loaded
+    # Add key if agent is running and no identities
+    if ssh-add -l 2>&1 | grep -q "The agent has no identities"; then
         ssh-add
     fi
 }
+
 
 # check for dotfile updates & reload this file
 [ ! -e ~/.dotfiles/.update_check ] && touch -t 197001010000 ~/.dotfiles/.update_check

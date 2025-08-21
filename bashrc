@@ -35,39 +35,8 @@ export HISTIGNORE=$'[ \t]*:&:[fb]g:exit:ls:history:hist'
 #
 # Make bash append rather than overwrite the history on disk
 shopt -s histappend
-
-# Shell Options
-#
-# Use case-insensitive filename globbing
-shopt -s nocaseglob
-#
-# ignore some typos
-shopt -s cdspell
-#
-# Disable suspend
-stty -ixon
-
-# Completion options
-#
-# case-insensitive completion
-bind "set completion-ignore-case on"
-#
-# show suggestions immediately
-bind "set show-all-if-ambiguous on"
-#
-# show all suggestions
-bind "set completion-query-items 0"
-
-# History Options
-#
-# Don't put duplicate lines in the history.
-export HISTCONTROL=$HISTCONTROL${HISTCONTROL+,}ignoredups
-#
-# Ignore some controlling instructions
-export HISTIGNORE=$'[ \t]*:&:[fb]g:exit:ls:history:hist'
-#
-# Make bash append rather than overwrite the history on disk
-shopt -s histappend
+HISTSIZE=10000               # lines kept in memory
+HISTFILESIZE=200000          # total lines kept on disk
 
 # Aliases
 #
@@ -149,8 +118,18 @@ function __ssh_agent() {
     fi
 }
 
+function __reload_history() {
+ builtin history -a  # write the previous history line to disk
+ HISTFILESIZE=$HISTSIZE # prevent history number from changing
+ builtin history -c  # clear current history
+ builtin history -r  # reload history
+}
+
+PROMPT_COMMAND="__reload_history${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+export PROMPT_COMMAND
 
 # check for dotfile updates & reload this file
+# this should run last so that if I cancel the update it still loads the rest of the file
 [ ! -e ~/.dotfiles/.update_check ] && touch -t 197001010000 ~/.dotfiles/.update_check
 if [[ $(( $(date +%s) - $(date +%s -r ~/.dotfiles/.update_check) )) -gt 28800 ]]; then
 	echo Updating dotfiles...

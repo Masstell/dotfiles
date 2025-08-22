@@ -85,6 +85,20 @@ export TMOUT=0
 [ -f ~/.git-completion.bash ] && source ~/.git-completion.bash # source git-completion if it exists
 [ -f /etc/bash_completion ] && source /etc/bash_completion # source bash_completion if it exists
 
+# use oh-my-posh, fallback to prompt_command
+[ -d ~/.local ] && export PATH=$PATH:~/.local/bin
+if command -v oh-my-posh &> /dev/null; then
+	eval "$(oh-my-posh init bash --config ~/.dotfiles/ohmyposhv3.json)"
+	function set_poshcontext(){
+		__reload_history
+	}
+	export -f set_poshcontext
+elif [[ -n $(readonly | grep PROMPT_COMMAND) ]]; then
+    PS1="\[\e]0;\h:\w\a\]\[\e[0;32m\]\u@\h \[\e[0;33m\]\w\n\[\e[0m\]\$ "
+else
+    export PROMPT_COMMAND=__prompt_command
+fi
+
 # custom functions
 
 function __ssh_agent() {

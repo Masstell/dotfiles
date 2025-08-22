@@ -1,59 +1,122 @@
-if has("syntax")
-  syntax on
+" Core
+if has('syntax') | syntax on | endif
+filetype plugin indent on
+
+" Leader must be set before mappings/plugins
+let mapleader = ","
+" (optional) local leader too:
+let maplocalleader = ","
+
+" Remember last cursor position when reopening a file
+if has('autocmd')
+  augroup restore_cursor | autocmd!
+    autocmd BufReadPost * if line("'\"") > 1 && line("'\"") <= line("$") |
+          \ execute "normal! g'\"" | endif
+  augroup END
 endif
 
-if has("autocmd")
-  au BufReadPost * if line("'\"") > 1 && line("'\"") <= line("$") | exe "normal! g'\"" | endif
-endif
+" ── UI ───────────────────────────────────────────────────────────────────────
+set number                      " absolute line numbers
+" set relativenumber            " (optional) hybrid numbers; <leader>rn toggles
+set ruler                       " show cursor position
+set showcmd                     " show partial commands
+set laststatus=2                " always show statusline
+set noshowmode                  " don't show -- INSERT -- when we have a statusline
+set wrap                        " soft-wrap long lines
+set scrolloff=5                 " keep context around cursor
+set signcolumn=auto             " always show sign column (prevents jitter)
 
-" BASIC UI
-set number              " Show line numbers
-set ruler               " Show cursor position
-set showcmd             " Show incomplete commands
-set cursorline          " Highlight current line
-set laststatus=2        " Always show status line
-set wrap                " Enable line wrapping
+" NO underline: disable cursorline completely
+set nocursorline
+" …and make sure nobody re-enables underline by theme
+if has('termguicolors') | set termguicolors | endif
+highlight CursorLine cterm=NONE gui=NONE
 
-" Centralized directory for backups, swap, and undo
-set backupdir=~/.vim/backups//
-set directory=~/.vim/swaps//
-set undodir=~/.vim/undos//
+" Colors (pick any built-in you like)
+" colorscheme desert
 
-" FILE HANDLING
+" ── Files & backups ──────────────────────────────────────────────────────────
 set encoding=utf-8
 set fileencoding=utf-8
-set backup              " Keep backup file
-set undofile            " Persistent undo history
-set noswapfile          " Disable swap file
-set autoread            " Auto reload files changed outside Vim
 
-" INDENTATION
-set tabstop=4           " Number of spaces a <Tab> counts for
-set shiftwidth=4        " Number of spaces for autoindent
-set expandtab           " Use spaces instead of tabs
-set smartindent         " Smart auto-indenting on new lines
-set autoindent          " Copy indent from current line
+" Centralized dirs (create if missing)
+silent! call mkdir($HOME.'/.vim/backups', 'p')
+silent! call mkdir($HOME.'/.vim/undos',   'p')
 
-" SEARCH
-set ignorecase          " Case-insensitive search...
-set smartcase           " ... unless search includes uppercase
-set incsearch           " Show matches as you type
-set hlsearch            " Highlight matches
+set backup                      " keep backups
+set backupdir=~/.vim/backups//
+set undofile                    " persistent undo
+set undodir=~/.vim/undos//
+set noswapfile                  " skip swap files (we have backups/undo)
 
-" TABS AND SPACES
-set backspace=indent,eol,start " Make backspace behave more like other editors
+" ── Editing defaults ─────────────────────────────────────────────────────────
+set tabstop=4
+set shiftwidth=4
+set expandtab
+set smartindent
+set autoindent
+set shiftround                  " round indents to shiftwidth
+set backspace=indent,eol,start
+set textwidth=0                 " don't auto-wrap while typing
+set formatoptions+=j            " remove comment leader when joining lines
 
-" FILETYPE AND PLUGINS
-filetype plugin indent on
-syntax on
+" ── Searching ────────────────────────────────────────────────────────────────
+set ignorecase
+set smartcase
+set incsearch
+set hlsearch
+set gdefault                    " :s/foo/bar/ affects all matches by default
+nnoremap <leader>/ :nohlsearch<CR>
 
-" COLORSCHEME
-" set termguicolors
-" colorscheme desert      " Change to 'elflord', 'murphy', etc., or install one
+" ── Splits & navigation ─────────────────────────────────────────────────────
+set splitbelow
+set splitright
+set hidden                      " switch buffers without saving
+set updatetime=300              " faster CursorHold & swap/undo writes
+set shortmess+=c                " fewer ins-completion messages
 
-" VISUALS
-set scrolloff=5         " Keep cursor 5 lines from top/bottom
-" set signcolumn=yes      " Always show signcolumn (useful with Git plugins)
+" ── Completion / UI niceties ────────────────────────────────────────────────
+set wildmenu
+set wildmode=longest:full,full
+set completeopt=menuone,noinsert,noselect
 
-" STATUSLINE (basic)
-set statusline=%f\ %y\ %m\ %r%=%-14.(%l,%c%V%)\ %P
+" Show invisible characters (toggle with <leader>lc)
+set list
+set listchars=tab:»·,trail:·,extends:…,precedes:…,nbsp:␣
+nnoremap <leader>lc :set list!<CR>
+
+" Trim trailing spaces on write (but skip for markdown/markdown fenced code)
+if has('autocmd')
+  augroup trim_ws | autocmd!
+    autocmd BufWritePre * if &ft !~# 'markdown' | silent! %s/\s\+$//e | endif
+  augroup END
+endif
+
+" ── Clipboard (only if compiled with +clipboard) ────────────────────────────
+if has('clipboard')
+  set clipboard=unnamedplus
+endif
+
+" ── Statusline (lightweight, informative) ───────────────────────────────────
+let &statusline = '%<%f %m%r%h%w%y%= [%{&fileencoding?&fileencoding:&encoding}/%{&fileformat}] %l:%c %p%%'
+
+" ── Grep: use ripgrep if available ──────────────────────────────────────────
+if executable('rg')
+  set grepprg=rg\ --vimgrep\ --hidden\ --glob\ '!.git'
+  set grepformat=%f:%l:%c:%m
+endif
+
+" ── Quality-of-life mappings ────────────────────────────────────────────────
+let mapleader=" "
+nnoremap <leader>w :update<CR>
+nnoremap <leader>q :q<CR>
+nnoremap <leader>bd :bdelete<CR>
+nnoremap <leader>bn :bnext<CR>
+nnoremap <leader>bp :bprevious<CR>
+
+" ── NetRW (built-in file browser) sane defaults ─────────────────────────────
+let g:netrw_banner=0
+let g:netrw_browse_split=4
+let g:netrw_liststyle=3
+let g:netrw_winsize=25
+

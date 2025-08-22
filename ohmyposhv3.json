@@ -1,0 +1,209 @@
+{
+  "$schema": "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/schema.json",
+  "palette": {
+    "black": "#011627",
+    "blue": "#0037da",
+    "blue-purple": "#4063d8",
+    "dark-blue": "#0b59e7",
+    "dark-gray": "#575656",
+    "git-ahead": "#b787d7",
+    "git-ahead-behind": "#b787d7",
+    "git-behind": "#b787d7",
+    "git-changed": "#16b1ac",
+    "git-default": "#16b1ac",
+    "green": "#6ca35e",
+    "light-blue": "#48c1fd",
+    "light-gray": "#d6deeb",
+    "light-green": "#4fe488",
+    "orange": "#ffa400",
+    "orange-red": "#ef541c",
+    "purple": "#2e2a65",
+    "python-blue": "#0087d8",
+    "red": "#e44141",
+    "white": "#ffffff",
+    "yellow": "#ffde57"
+  },
+  "console_title_template": "{{if matchP \"windows\" .OS}}{{else}}{{.HostName}}:{{end}}{{.PWD}}",
+  "pwd": "osc99",
+  "blocks": [
+    {
+      "type": "prompt",
+      "alignment": "left",
+      "segments": [
+        {
+          "properties": {
+            "cache_duration": "none"
+          },
+          "leading_diamond": "\ue0b2",
+          "template": " {{.UserName}}@{{.HostName}} ",
+          "foreground": "p:black",
+          "background": "p:light-blue",
+          "type": "session",
+          "style": "powerline",
+          "foreground_templates": [
+            "{{ if .Root }}p:light-gray{{ end }}"
+          ],
+          "background_templates": [
+            "{{ if .Root }}p:red{{ end }}"
+          ]
+        },
+        {
+          "properties": {
+            "cache_duration": "none",
+            "max_depth": 3,
+            "style": "agnoster_short"
+          },
+          "template": " {{ .Path }} ",
+          "foreground": "p:black",
+          "powerline_symbol": "\ue0b0",
+          "background": "p:yellow",
+          "type": "path",
+          "style": "powerline"
+        },
+        {
+          "properties": {
+            "cache_duration": "none"
+          },
+          "template": " \ue620 {{ .Full }} ",
+          "foreground": "p:white",
+          "powerline_symbol": "\ue0b0",
+          "background": "p:blue",
+          "type": "lua",
+          "style": "powerline"
+        },
+        {
+          "properties": {
+            "cache_duration": "none"
+          },
+          "template": " \ued0d {{ .Full }} ",
+          "foreground": "p:white",
+          "powerline_symbol": "\ue0b0",
+          "background": "p:green",
+          "type": "node",
+          "style": "powerline"
+        },
+        {
+          "properties": {
+            "cache_duration": "none"
+          },
+          "template": " \ue73d {{ .Full }} ",
+          "foreground": "p:white",
+          "powerline_symbol": "\ue0b0",
+          "background": "p:blue-purple",
+          "type": "php",
+          "style": "powerline"
+        },
+        {
+          "properties": {
+            "cache_duration": "none",
+            "display_mode": "context"
+          },
+          "template": " \ue73c {{ if .Venv }}{{ .Venv }} {{ end }}{{ .Full }} ",
+          "foreground": "p:black",
+          "powerline_symbol": "\ue0b0",
+          "background": "p:python-blue",
+          "type": "python",
+          "style": "powerline"
+        },
+        {
+          "type": "react",
+          "style": "powerline",
+          "powerline_symbol": "\ue0b0",
+          "background": "#81a1c1",
+          "template": " \ue7ba {{ .Full }} "
+        },
+        {
+          "properties": {
+            "cache_duration": "none"
+          },
+          "template": " \udb80\udd1b {{ .Full }} ",
+          "foreground": "p:white",
+          "powerline_symbol": "\ue0b0",
+          "background": "p:purple",
+          "type": "yarn",
+          "style": "powerline"
+        },
+        {
+          "properties": {
+            "branch_icon": "\ue725 ",
+            "branch_max_length": 40,
+            "cache_duration": "none",
+            "fetch_stash_count": true,
+            "fetch_status": true,
+            "fetch_upstream_icon": true,
+            "fetch_worktree_count": true
+          },
+          "template": " {{ .UpstreamIcon }}{{ .HEAD }}{{if .BranchStatus }} {{ .BranchStatus }}{{ end }}{{ if .Working.Changed }} \uf044 {{ .Working.String }}{{ end }}{{ if and (.Working.Changed) (.Staging.Changed) }} |{{ end }}{{ if .Staging.Changed }} \uf046 {{ .Staging.String }}{{ end }}{{ if gt .StashCount 0 }} \ueb4b {{ .StashCount }}{{ end }} ",
+          "foreground": "p:black",
+          "powerline_symbol": "\ue0b0",
+          "background": "p:git-default",
+          "type": "git",
+          "style": "powerline",
+          "background_templates": [
+            "{{ if or (.Working.Changed) (.Staging.Changed) }}p:git-changed{{ end }}",
+            "{{ if and (gt .Ahead 0) (gt .Behind 0) }}p:git-ahead-behind{{ end }}",
+            "{{ if gt .Ahead 0 }}p:git-ahead{{ end }}",
+            "{{ if gt .Behind 0 }}p:git-behind{{ end }}"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "prompt",
+      "alignment": "right",
+      "segments": [
+        {
+          "properties": {
+            "always_enabled": true,
+            "cache_duration": "none"
+          },
+          "leading_diamond": "\ue0b6",
+          "template": "{{ if gt .Code 0 }}\uf00d {{ .Code }} {{ reason .Code }}{{ else }}\uf00c{{ end }} ",
+          "foreground": "p:black",
+          "background": "p:light-green",
+          "type": "status",
+          "style": "diamond",
+          "foreground_templates": [
+            "{{ if gt .Code 0 }}p:light-gray{{ end }}"
+          ],
+          "background_templates": [
+            "{{ if gt .Code 0 }}p:red{{ end }}"
+          ]
+        },
+        {
+          "properties": {
+            "cache_duration": "none",
+            "style": "roundrock",
+            "threshold": 0
+          },
+          "trailing_diamond": "\ue0b4",
+          "template": " \uf252 {{ .FormattedMs }}",
+          "foreground": "p:light-gray",
+          "background": "p:dark-gray",
+          "type": "executiontime",
+          "style": "diamond"
+        }
+      ]
+    },
+    {
+      "type": "prompt",
+      "alignment": "left",
+      "segments": [
+        {
+          "properties": {
+            "always_enabled": true,
+            "cache_duration": "none"
+          },
+          "template": "{{if .Root}}#{{else}}>{{end}}",
+          "foreground": "p:light-gray",
+          "type": "status",
+          "style": "plain"
+        }
+      ],
+      "newline": true
+    }
+  ],
+  "version": 3,
+  "patch_pwsh_bleed": true,
+  "final_space": true
+}

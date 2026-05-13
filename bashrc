@@ -79,12 +79,16 @@ hash colordiff 2>/dev/null && alias diff=colordiff # use colordiff instead of di
 hash vim 2>/dev/null && export EDITOR=$(which vim)
 export TMOUT=0
 
-# Use Windows 1Password SSH agent if available, otherwise fall back to native ssh-agent
-[ -r ~/.ssh-agent ] && source ~/.ssh-agent >/dev/null
+# Use Windows 1Password SSH agent if available, otherwise fall back to native ssh-agent.
+# Only restore the saved agent file if we don't already have a working agent
+# (e.g. an SSH_AUTH_SOCK forwarded via `ssh -A` should be left alone).
 if ssh-add.exe -l >/dev/null 2>&1; then
     alias ssh='ssh.exe'
     alias ssh-add='ssh-add.exe'
 else
+    if ! ssh-add -l >/dev/null 2>&1; then
+        [ -r ~/.ssh-agent ] && source ~/.ssh-agent >/dev/null
+    fi
     alias ssh='__ssh_agent && ssh'
     alias scp='__ssh_agent && scp'
 fi
@@ -159,3 +163,6 @@ if [[ $(( $(date +%s) - $(date +%s -r ~/.dotfiles/.update_check) )) -gt 28800 ]]
         touch ~/.dotfiles/.update_check
         source ~/.bashrc
 fi
+
+# opencode
+export PATH=/home/matt/.opencode/bin:$PATH

@@ -49,8 +49,6 @@ alias la='ls -A'
 alias grep='grep -i --color=auto'
 alias egrep='egrep --color=auto'
 alias fgrep='fgrep --color=auto'
-alias scp='__ssh_agent && scp'
-alias ssh='__ssh_agent && ssh'
 alias screen='screen -U' # always start screen in UTF-8 mode
 alias sudo='sudo ' # expands other aliases when using sudo
 #
@@ -80,7 +78,17 @@ hash colordiff 2>/dev/null && alias diff=colordiff # use colordiff instead of di
 # other settings
 hash vim 2>/dev/null && export EDITOR=$(which vim)
 export TMOUT=0
+
+# Use Windows 1Password SSH agent if available, otherwise fall back to native ssh-agent
 [ -r ~/.ssh-agent ] && source ~/.ssh-agent >/dev/null
+if ssh-add.exe -l >/dev/null 2>&1; then
+    alias ssh='ssh.exe'
+    alias ssh-add='ssh-add.exe'
+else
+    alias ssh='__ssh_agent && ssh'
+    alias scp='__ssh_agent && scp'
+fi
+
 [ -r ~/.dircolors ] && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
 [ -f ~/.git-completion.bash ] && source ~/.git-completion.bash # source git-completion if it exists
 [ -f /etc/bash_completion ] && source /etc/bash_completion # source bash_completion if it exists
@@ -88,11 +96,11 @@ export TMOUT=0
 # use oh-my-posh, fallback to prompt_command
 [ -d ~/.local ] && export PATH=$PATH:~/.local/bin
 if command -v oh-my-posh &> /dev/null; then
-	eval "$(oh-my-posh init bash --config ~/.dotfiles/ohmyposhv3.json)"
-	function set_poshcontext(){
-		__reload_history
-	}
-	export -f set_poshcontext
+        eval "$(oh-my-posh init bash --config ~/.dotfiles/ohmyposhv3.json)"
+        function set_poshcontext(){
+                __reload_history
+        }
+        export -f set_poshcontext
 elif [[ -n $(readonly | grep PROMPT_COMMAND) ]]; then
     PS1="\[\e]0;\h:\w\a\]\[\e[0;32m\]\u@\h \[\e[0;33m\]\w\n\[\e[0m\]\$ "
 else
@@ -146,8 +154,8 @@ export PROMPT_COMMAND
 # this should run last so that if I cancel the update it still loads the rest of the file
 [ ! -e ~/.dotfiles/.update_check ] && touch -t 197001010000 ~/.dotfiles/.update_check
 if [[ $(( $(date +%s) - $(date +%s -r ~/.dotfiles/.update_check) )) -gt 28800 ]]; then
-	echo Updating dotfiles...
-	~/.dotfiles/update.sh
-	touch ~/.dotfiles/.update_check
-	source ~/.bashrc
+        echo Updating dotfiles...
+        ~/.dotfiles/update.sh
+        touch ~/.dotfiles/.update_check
+        source ~/.bashrc
 fi

@@ -165,4 +165,4 @@ if [[ $(( $(date +%s) - $(date +%s -r ~/.dotfiles/.update_check) )) -gt 28800 ]]
 fi
 
 # opencode
-export PATH=/home/matt/.opencode/bin:$PATH
+export PATH=$HOME/.opencode/bin:$PATH

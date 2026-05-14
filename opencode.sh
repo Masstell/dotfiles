@@ -33,7 +33,7 @@ NC='\033[0m'
 OPENCODE_BIN="${HOME}/.opencode/bin/opencode"
 if [[ ! -x "$OPENCODE_BIN" ]]; then
     echo -e "${RED}opencode not found at ${OPENCODE_BIN}${NC}"
-    echo -e "${DIM}Install with: go install github.com/opencodeai/opencode/cmd/opencode@latest${NC}"
+    echo -e "${DIM}Install with: curl -fsSL https://opencode.ai/install | bash${NC}"
     exit 1
 fi
 

@@ -30,6 +30,13 @@ DIM='\033[0;90m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+OPENCODE_BIN="${HOME}/.opencode/bin/opencode"
+if [[ ! -x "$OPENCODE_BIN" ]]; then
+    echo -e "${RED}opencode not found at ${OPENCODE_BIN}${NC}"
+    echo -e "${DIM}Install with: go install github.com/opencodeai/opencode/cmd/opencode@latest${NC}"
+    exit 1
+fi
+
 SESSION_ID=""
 HEARTBEAT_PID=""
 OPENCODE_CONFIG="${HOME}/.config/opencode/opencode.json"

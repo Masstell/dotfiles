@@ -9,4 +9,4 @@ ln -svf ~/.dotfiles/bashrc ~/.bashrc
 
 mkdir -p ~/.vim/backups ~/.vim/swaps ~/.vim/undos
 mkdir -p ~/.local/bin
-ln -svf ~/.dotfiles/opencode.sh ~/.local/bin/opencode.sh
+[ -x ~/.opencode/bin/opencode ] && ln -svf ~/.dotfiles/opencode.sh ~/.local/bin/opencode.sh

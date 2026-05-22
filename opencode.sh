@@ -9,9 +9,19 @@ set -euo pipefail
 # For remote access, set INFERENCE_HOST to the server's LAN IP:
 #   INFERENCE_HOST=192.168.1.4 ./scripts/opencode.sh
 
+# Load local .env if it exists (gitignored, contains API keys)
+_ENV_FILE="${HOME}/.dotfiles/.env"
+if [[ -f "$_ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$_ENV_FILE"
+    set +a
+fi
+
 INFERENCE_HOST="${INFERENCE_HOST:-192.168.1.4}"
 ARBITER_URL="${ARBITER_URL:-http://${INFERENCE_HOST}:8100}"
 LLAMA_URL="${LLAMA_URL:-http://${INFERENCE_HOST}:8084}"
+LLAMA_API_KEY="${LLAMA_API_KEY:-}"
 ARBITER_API_KEY="${ARBITER_API_KEY:-}"
 
 # Default model — used when --model is passed or as the preselected
@@ -157,7 +167,7 @@ patch_opencode_config() {
 
     python3 -c "
 import json, sys
-cfg_path, model, llama_url = sys.argv[1], sys.argv[2], sys.argv[3]
+cfg_path, model, llama_url, api_key = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 with open(cfg_path) as f:
     cfg = json.load(f)
 cfg['model'] = f'llamacpp/{model}'
@@ -165,13 +175,15 @@ cfg.setdefault('provider', {}).setdefault('llamacpp', {})
 provider = cfg['provider']['llamacpp']
 provider.setdefault('options', {})
 provider['options']['baseURL'] = f'{llama_url}/v1'
+if api_key:
+    provider['options']['apiKey'] = api_key
 provider.setdefault('models', {})
 if model not in provider['models']:
     provider['models'][model] = {'name': model}
 with open(cfg_path, 'w') as f:
     json.dump(cfg, f, indent=2)
     f.write('\n')
-" "$OPENCODE_CONFIG" "$SELECTED_MODEL" "$LLAMA_URL"
+" "$OPENCODE_CONFIG" "$SELECTED_MODEL" "$LLAMA_URL" "$LLAMA_API_KEY"
     echo -e "${DIM}Updated opencode config → ${SELECTED_MODEL} @ ${LLAMA_URL}${NC}"
 }
 

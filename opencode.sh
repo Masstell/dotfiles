@@ -53,31 +53,38 @@ for m in data.get('data', []):
 }
 
 patch_opencode_config() {
-    if [[ ! -f "$OPENCODE_CONFIG" ]]; then
-        echo -e "${YELLOW}No opencode config at ${OPENCODE_CONFIG} — skipping config patch${NC}"
-        return
-    fi
+    mkdir -p "$(dirname "$OPENCODE_CONFIG")"
 
-    OPENCODE_CONFIG_BAK="${OPENCODE_CONFIG}.bak"
-    cp "$OPENCODE_CONFIG" "$OPENCODE_CONFIG_BAK"
+    if [[ -f "$OPENCODE_CONFIG" ]]; then
+        OPENCODE_CONFIG_BAK="${OPENCODE_CONFIG}.bak"
+        cp "$OPENCODE_CONFIG" "$OPENCODE_CONFIG_BAK"
+    else
+        OPENCODE_CONFIG_BAK=""
+        echo -e "${DIM}Creating opencode config at ${OPENCODE_CONFIG}${NC}"
+    fi
 
     python3 -c "
 import json, sys
+from pathlib import Path
 cfg_path, model, llm_url, api_key = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-with open(cfg_path) as f:
-    cfg = json.load(f)
+path = Path(cfg_path)
+if path.exists() and path.stat().st_size > 0:
+    with path.open() as f:
+        cfg = json.load(f)
+else:
+    cfg = {}
 cfg['model'] = f'llamacpp/{model}'
 cfg.setdefault('provider', {}).setdefault('llamacpp', {})
 provider = cfg['provider']['llamacpp']
 provider.setdefault('options', {})
-provider['options']['baseURL'] = f'{llm_url.rstrip(\"/\")}/v1'
+provider['options']['baseURL'] = llm_url.rstrip('/') + '/v1'
 provider['options']['apiKey'] = api_key
 provider.setdefault('models', {})
 if model not in provider['models']:
     provider['models'][model] = {'name': model}
-with open(cfg_path, 'w') as f:
+with path.open('w') as f:
     json.dump(cfg, f, indent=2)
-    f.write('\\n')
+    f.write('\n')
 " "$OPENCODE_CONFIG" "$SELECTED_MODEL" "$OPENCODE_LLM_URL" "$OPENCODE_ARBITER_KEY"
     echo -e "${DIM}Updated opencode config -> ${SELECTED_MODEL} @ ${OPENCODE_LLM_URL}${NC}"
 }

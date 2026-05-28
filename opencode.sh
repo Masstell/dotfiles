@@ -18,14 +18,11 @@ fi
 
 OPENCODE_LLM_URL="${OPENCODE_LLM_URL:-${LLAMA_URL:-https://ai.mswensen.com}}"
 OPENCODE_ARBITER_KEY="${OPENCODE_ARBITER_KEY:-${LLAMA_API_KEY:-}}"
-OPENCODE_MODEL="${OPENCODE_MODEL:-Qwen3.5-122B-A10B-Uncensored-HauhauCS-Aggressive-Q6_K_P}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
 DIM='\033[0;90m'
-BOLD='\033[1m'
 NC='\033[0m'
 
 OPENCODE_BIN="${HOME}/.opencode/bin/opencode"
@@ -38,98 +35,21 @@ fi
 OPENCODE_CONFIG="${HOME}/.config/opencode/opencode.json"
 OPENCODE_CONFIG_BAK=""
 SELECTED_MODEL=""
-USE_PICKER=false
-MODELS_JSON=""
-
-inference_curl() {
-    local method="$1"
-    local path="$2"
-    shift 2
-    curl -sf -X "$method" "${OPENCODE_LLM_URL%/}${path}" \
-        -H "Authorization: Bearer ${OPENCODE_ARBITER_KEY}" \
-        "$@"
-}
-
-load_models_json() {
-    MODELS_JSON=$(inference_curl GET /v1/models) || {
-        echo -e "${RED}Failed to fetch models from ${OPENCODE_LLM_URL}${NC}"
-        echo -e "${DIM}Check OPENCODE_ARBITER_KEY in ${_ENV_FILE}.${NC}"
-        exit 1
-    }
-}
 
 get_loaded_model() {
-    printf '%s' "$MODELS_JSON" | python3 -c "
+    curl -sf "${OPENCODE_LLM_URL%/}/v1/models" \
+        -H "Authorization: Bearer ${OPENCODE_ARBITER_KEY}" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 for m in data.get('data', []):
     if m.get('status', {}).get('value') == 'loaded':
         print(m['id'])
         break
-" 2>/dev/null
-}
-
-pick_model() {
-    local -a MODEL_IDS
-    mapfile -t MODEL_IDS < <(printf '%s' "$MODELS_JSON" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for m in data.get('data', []):
-    print(m['id'])
-" 2>/dev/null)
-
-    if [[ ${#MODEL_IDS[@]} -eq 0 ]]; then
-        echo -e "${RED}No models available from ${OPENCODE_LLM_URL}${NC}"
+" 2>/dev/null || {
+        echo -e "${RED}Failed to fetch models from ${OPENCODE_LLM_URL}${NC}" >&2
+        echo -e "${DIM}Check OPENCODE_ARBITER_KEY in ${_ENV_FILE}.${NC}" >&2
         exit 1
-    fi
-
-    local loaded
-    loaded=$(get_loaded_model)
-
-    echo ""
-    echo -e "${BOLD}Available models:${NC}"
-    echo ""
-
-    local loaded_idx="" default_idx=""
-    for i in "${!MODEL_IDS[@]}"; do
-        local num=$((i + 1))
-        local name="${MODEL_IDS[$i]}"
-        local markers=""
-        if [[ "$name" == "$loaded" ]]; then
-            markers+=" [LOADED]"
-            loaded_idx=$num
-        fi
-        if [[ "$name" == "$OPENCODE_MODEL" ]]; then
-            markers+=" [DEFAULT]"
-            default_idx=$num
-        fi
-        if [[ -n "$markers" ]]; then
-            echo -e "  ${GREEN}${num}) ${name}${markers}${NC}"
-        else
-            echo -e "  ${DIM}${num}) ${name}${NC}"
-        fi
-    done
-
-    local prompt_default="${loaded_idx:-$default_idx}"
-    local prompt_hint=""
-    if [[ -n "$prompt_default" ]]; then
-        prompt_hint=" [${prompt_default}]"
-    fi
-
-    echo ""
-    echo -e "${DIM}Note: this wrapper does not load or reserve models; selecting an unloaded model may fail.${NC}"
-    read -r -p "$(echo -e "${CYAN}Select model${prompt_hint}: ${NC}")" choice
-
-    if [[ -z "$choice" && -n "$prompt_default" ]]; then
-        choice=$prompt_default
-    fi
-
-    if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#MODEL_IDS[@]} )); then
-        echo -e "${RED}Invalid selection${NC}"
-        exit 1
-    fi
-
-    SELECTED_MODEL="${MODEL_IDS[$((choice - 1))]}"
+    }
 }
 
 patch_opencode_config() {
@@ -176,27 +96,14 @@ trap cleanup EXIT
 OPENCODE_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --model-picker)
-            USE_PICKER=true
-            shift
-            ;;
-        --model)
-            SELECTED_MODEL="$2"
-            shift 2
-            ;;
         --help|-h)
-            echo "Usage: $0 [--model-picker] [--model MODEL_NAME] [opencode args...]"
+            echo "Usage: $0 [opencode args...]"
             echo ""
-            echo "  By default, uses whatever model the OpenAI-compatible endpoint reports as loaded."
-            echo "  Does not register sessions, reserve the GPU, or request model changes."
-            echo ""
-            echo "  --model-picker    Show an interactive model picker. Does not load models."
-            echo "  --model NAME      Use a specific model by name. Does not load models."
+            echo "  Uses whatever model the arbiter reports as loaded."
             echo ""
             echo "Environment:"
             echo "  OPENCODE_LLM_URL      OpenAI-compatible endpoint (default: https://ai.mswensen.com)"
             echo "  OPENCODE_ARBITER_KEY  Per-instance arbiter inference key"
-            echo "  OPENCODE_MODEL        Default model highlighted in picker"
             exit 0
             ;;
         *)
@@ -212,21 +119,12 @@ if [[ -z "$OPENCODE_ARBITER_KEY" ]]; then
     exit 1
 fi
 
-load_models_json
-
-if [[ -n "$SELECTED_MODEL" ]]; then
-    :
-elif [[ "$USE_PICKER" == "true" ]]; then
-    pick_model
-else
-    SELECTED_MODEL=$(get_loaded_model)
-    if [[ -z "$SELECTED_MODEL" ]]; then
-        echo -e "${RED}No model is currently loaded according to ${OPENCODE_LLM_URL}/v1/models.${NC}"
-        echo -e "${DIM}Load a model elsewhere, or use --model to force a model name.${NC}"
-        exit 1
-    fi
-    echo -e "${DIM}Using loaded model: ${SELECTED_MODEL}${NC}"
+SELECTED_MODEL=$(get_loaded_model)
+if [[ -z "$SELECTED_MODEL" ]]; then
+    echo -e "${RED}No model is currently loaded according to ${OPENCODE_LLM_URL}/v1/models.${NC}"
+    exit 1
 fi
+echo -e "${DIM}Using loaded model: ${SELECTED_MODEL}${NC}"
 
 patch_opencode_config
 

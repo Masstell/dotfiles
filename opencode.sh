@@ -46,8 +46,8 @@ for m in data.get('data', []):
         print(m['id'])
         break
 " 2>/dev/null || {
-        echo -e "${RED}Failed to fetch models from ${OPENCODE_LLM_URL}${NC}"
-        echo -e "${DIM}Check OPENCODE_ARBITER_KEY in ${_ENV_FILE}.${NC}"
+        echo -e "${RED}Failed to fetch models from ${OPENCODE_LLM_URL}${NC}" >&2
+        echo -e "${DIM}Check OPENCODE_ARBITER_KEY in ${_ENV_FILE}.${NC}" >&2
         exit 1
     }
 }

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# claude-status — the LLM calls this to declare what it's working on.
+# The system-wide status line (~/.claude/statusline.sh) reads what's written here.
+#
+# Usage:
+#   claude-status "<= five word summary>" ["<PR/issue ref, e.g. #35 or issue-123>"]
+#
+# Keyed by Claude Code session id, so two sessions in the same repo (or two
+# branches, or two windows on one branch) each keep their own summary.
+
+summary="$1"
+pr="$2"
+dir="$PWD"
+branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+sid="${CLAUDE_CODE_SESSION_ID:-nosession}"
+
+mkdir -p "$HOME/.claude/status"
+now="$(date +%s)"
+
+jq -n \
+  --arg s "$summary" \
+  --arg p "$pr" \
+  --arg b "$branch" \
+  --arg d "$dir" \
+  --argjson t "$now" \
+  '{summary:$s, pr:$p, branch:$b, dir:$d, ts:$t}' \
+  > "$HOME/.claude/status/$sid.json"
+
+# Sessions are ephemeral, so their files are too — drop anything untouched for a week.
+find "$HOME/.claude/status" -maxdepth 1 -name '*.json' -type f -mtime +7 -delete 2>/dev/null

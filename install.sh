@@ -19,3 +19,21 @@ for skill in ~/.dotfiles/skills/*/; do
     ln -svf "$skill" ~/.claude/skills/
     ln -svf "$skill" ~/.config/opencode/skills/
 done
+
+# Claude Code status line + global working prefs + declare-status helper
+mkdir -p ~/.claude/bin ~/.claude/status
+ln -svf ~/.dotfiles/claude/statusline.sh  ~/.claude/statusline.sh
+ln -svf ~/.dotfiles/claude/claude-status  ~/.claude/bin/claude-status
+ln -svf ~/.dotfiles/claude/CLAUDE.md      ~/.claude/CLAUDE.md
+# Merge status-line config into settings.json (idempotent; preserves machine-specific settings)
+if command -v jq >/dev/null; then
+    SETTINGS=~/.claude/settings.json
+    [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+    tmp=$(mktemp)
+    jq '
+      .statusLine = {type:"command", command:"~/.claude/statusline.sh", padding:0, refreshInterval:10}
+      | .permissions = ((.permissions // {}) + {allow: (((.permissions.allow // []) + ["Bash(~/.claude/bin/claude-status:*)"]) | unique)})
+    ' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
+else
+    echo "jq not found — add statusLine to ~/.claude/settings.json manually (see claude/README.md)"
+fi

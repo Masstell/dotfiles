@@ -9,6 +9,27 @@ ln -svf ~/.dotfiles/bashrc ~/.bashrc
 
 mkdir -p ~/.vim/backups ~/.vim/swaps ~/.vim/undos
 mkdir -p ~/.local/bin
+export PATH="$HOME/.local/bin:$PATH"
+
+# jq — required by the Claude status line and the settings.json merge below.
+# Grab the standalone binary (no sudo); mirrors the sudo-less oh-my-posh install above.
+if ! command -v jq >/dev/null; then
+    case "$(uname -s)-$(uname -m)" in
+        Linux-x86_64)  jqbin=jq-linux-amd64 ;;
+        Linux-aarch64) jqbin=jq-linux-arm64 ;;
+        Darwin-arm64)  jqbin=jq-macos-arm64 ;;
+        Darwin-x86_64) jqbin=jq-macos-amd64 ;;
+        *)             jqbin= ;;
+    esac
+    if [ -n "$jqbin" ] && curl -fsSL -o ~/.local/bin/jq \
+        "https://github.com/jqlang/jq/releases/latest/download/$jqbin"; then
+        chmod +x ~/.local/bin/jq
+    else
+        rm -f ~/.local/bin/jq
+        echo "could not auto-install jq (unknown platform or download failed) — install it manually"
+    fi
+fi
+
 [ -x ~/.opencode/bin/opencode ] && ln -svf ~/.dotfiles/opencode.sh ~/.local/bin/opencode.sh
 command -v claude >/dev/null 2>&1 && ln -svf ~/.dotfiles/claude-local.sh ~/.local/bin/claude-local.sh
 

@@ -58,3 +58,20 @@ Usage/ctx numbers are colored bright green → yellow → red by severity (≥50
 `install.sh` symlinks the three files into `~/.claude/` and merges the `statusLine`
 config into `~/.claude/settings.json` with `jq` (idempotent — it preserves any
 machine-specific settings and won't duplicate on re-run). Requires `jq` and `git`.
+
+## Guard hook (`guard-hook.sh`)
+
+PreToolUse hook registered by `install.sh` (symlinked to `~/.claude/bin/claude-guard`)
+for two matchers: `Bash` and `Write|Edit|MultiEdit|NotebookEdit`. It blocks (exit 2)
+destructive shell commands (`rm`, `mv`, `shred`, `rsync --delete`, `find -delete/-exec`,
+`dd of=`, `mkfs`, `truncate`, `chattr -i`, redirection) that reference a protected path
+or run with cwd inside one, and any file-tool write targeting a protected path.
+
+Protected paths: built-in `/mnt/raid` prefix, plus one path-prefix per line in
+`~/.claude/guard-paths.local` (machine-local, never committed — use it for paths that
+shouldn't appear in this public repo, and for tests).
+
+Fail-closed: missing jq, malformed hook input, or internal errors block rather than
+allow. Written after the 2026-08-23 raid deletion incident. This is defense-in-depth
+only — it inspects command strings and cannot see inside scripts an agent writes then
+runs; the real boundary is filesystem ownership on the server.

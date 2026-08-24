@@ -106,5 +106,10 @@ if [[ -n "${MODEL_CTX:-}" ]]; then
     export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MODEL_CTX"
 fi
 
+# Agent lockdown (post 2026-08-23 incident): local-model agents never hold the
+# human's SSH agent socket — no path to PersonalKey signatures exists in this
+# process. Supervised cross-box work uses `claude-trusted` instead.
+unset SSH_AUTH_SOCK
+
 echo "claude-local: ${MODEL} via ${CLAUDE_LOCAL_URL} (ctx ${MODEL_CTX:-unknown})" >&2
 exec claude "$@"

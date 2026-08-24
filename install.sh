@@ -32,6 +32,7 @@ fi
 
 [ -x ~/.opencode/bin/opencode ] && ln -svf ~/.dotfiles/opencode.sh ~/.local/bin/opencode.sh
 command -v claude >/dev/null 2>&1 && ln -svf ~/.dotfiles/claude-local.sh ~/.local/bin/claude-local.sh
+command -v claude >/dev/null 2>&1 && ln -svf ~/.dotfiles/claude-trusted.sh ~/.local/bin/claude-trusted
 
 # Agent skills — shared across Copilot CLI, Codex, Claude Code, and opencode
 mkdir -p ~/.agents/skills ~/.claude/skills ~/.config/opencode/skills

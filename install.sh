@@ -41,20 +41,39 @@ for skill in ~/.dotfiles/skills/*/; do
     ln -svf "$skill" ~/.config/opencode/skills/
 done
 
-# Claude Code status line + global working prefs + declare-status helper
+# Claude Code status line + global working prefs + declare-status helper + guard hook
 mkdir -p ~/.claude/bin ~/.claude/status
 ln -svf ~/.dotfiles/claude/statusline.sh  ~/.claude/statusline.sh
 ln -svf ~/.dotfiles/claude/claude-status  ~/.claude/bin/claude-status
 ln -svf ~/.dotfiles/claude/CLAUDE.md      ~/.claude/CLAUDE.md
-# Merge status-line config into settings.json (idempotent; preserves machine-specific settings)
+ln -svf ~/.dotfiles/claude/guard-hook.sh  ~/.claude/bin/claude-guard
+# Merge status-line config + guard hook into settings.json (idempotent; preserves
+# machine-specific settings and unrelated hooks — existing claude-guard entries are
+# replaced with the canonical pair rather than duplicated)
 if command -v jq >/dev/null; then
     SETTINGS=~/.claude/settings.json
     [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
     tmp=$(mktemp)
-    jq '
+    # Guard-hook re-registration is surgical: strip only hook COMMANDS that are the
+    # guard (matched by ~-form, $HOME-expanded form, or basename — a prior run may
+    # have stored either spelling), keep any sibling hooks in the same entry, drop
+    # entries left empty, then append the canonical pair. Never touches unrelated
+    # hooks; never duplicates.
+    jq --arg guard '~/.claude/bin/claude-guard' --arg guard_abs "$HOME/.claude/bin/claude-guard" '
+      def is_guard: ((.command // "") | (. == $guard or . == $guard_abs or endswith("/claude-guard")));
       .statusLine = {type:"command", command:"~/.claude/statusline.sh", padding:0, refreshInterval:10}
       | .permissions = ((.permissions // {}) + {allow: (((.permissions.allow // []) + ["Bash(~/.claude/bin/claude-status:*)"]) | unique)})
+      | .hooks = (.hooks // {})
+      | .hooks.PreToolUse = (
+          ((.hooks.PreToolUse // [])
+            | map(.hooks = ((.hooks // []) | map(select(is_guard | not))))
+            | map(select((.hooks | length) > 0)))
+          + [
+              {matcher: "Bash", hooks: [{type: "command", command: $guard}]},
+              {matcher: "Write|Edit|MultiEdit|NotebookEdit", hooks: [{type: "command", command: $guard}]}
+            ]
+        )
     ' "$SETTINGS" > "$tmp" && mv "$tmp" "$SETTINGS"
 else
-    echo "jq not found — add statusLine to ~/.claude/settings.json manually (see claude/README.md)"
+    echo "jq not found — add statusLine + guard hook to ~/.claude/settings.json manually (see claude/README.md)"
 fi

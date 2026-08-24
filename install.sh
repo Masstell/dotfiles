@@ -54,12 +54,20 @@ if command -v jq >/dev/null; then
     SETTINGS=~/.claude/settings.json
     [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
     tmp=$(mktemp)
-    jq --arg guard '~/.claude/bin/claude-guard' '
+    # Guard-hook re-registration is surgical: strip only hook COMMANDS that are the
+    # guard (matched by ~-form, $HOME-expanded form, or basename — a prior run may
+    # have stored either spelling), keep any sibling hooks in the same entry, drop
+    # entries left empty, then append the canonical pair. Never touches unrelated
+    # hooks; never duplicates.
+    jq --arg guard '~/.claude/bin/claude-guard' --arg guard_abs "$HOME/.claude/bin/claude-guard" '
+      def is_guard: ((.command // "") | (. == $guard or . == $guard_abs or endswith("/claude-guard")));
       .statusLine = {type:"command", command:"~/.claude/statusline.sh", padding:0, refreshInterval:10}
       | .permissions = ((.permissions // {}) + {allow: (((.permissions.allow // []) + ["Bash(~/.claude/bin/claude-status:*)"]) | unique)})
       | .hooks = (.hooks // {})
       | .hooks.PreToolUse = (
-          ((.hooks.PreToolUse // []) | map(select(((.hooks // []) | any(.command == $guard)) | not)))
+          ((.hooks.PreToolUse // [])
+            | map(.hooks = ((.hooks // []) | map(select(is_guard | not))))
+            | map(select((.hooks | length) > 0)))
           + [
               {matcher: "Bash", hooks: [{type: "command", command: $guard}]},
               {matcher: "Write|Edit|MultiEdit|NotebookEdit", hooks: [{type: "command", command: $guard}]}

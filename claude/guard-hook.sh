@@ -56,6 +56,25 @@ mentions_protected() {
     return 1
 }
 
+# True if $1 contains a truncated prefix of a protected path immediately followed
+# by a shell glob char — catches `rm -rf /mnt/rai*` (the incident literally used a
+# glob) which the substring test alone misses. Prefixes start at 2 chars so a bare
+# "/" doesn't flag every absolute-path glob.
+glob_targets_protected() {
+    local s="$1" p pre i
+    for p in "${protected[@]}"; do
+        for ((i=2; i<=${#p}; i++)); do
+            pre="${p:0:i}"
+            case "$s" in *"$pre"[\*\?\[]*) return 0 ;; esac
+        done
+    done
+    return 1
+}
+
+# Escape a string for safe splicing into an ERE — a protected path containing
+# regex metacharacters (/mnt/raid[old]) must not break the pattern or fail open.
+esc_ere() { printf '%s' "$1" | sed 's/[][\\.|$(){}?+*^]/\\&/g'; }
+
 # True if $1 (a directory path) is at or under any protected prefix.
 under_protected() {
     local d="$1" p
@@ -79,21 +98,28 @@ case "$tool" in
         cwd="$(j '.cwd // empty')"
         [ -z "$cmd" ] && exit 0
 
-        # Destructive patterns. Word-boundary on the verb; options/paths follow freely.
+        # Destructive patterns. The verb boundary is "any non-word char or start",
+        # so \rm, /bin/rm, `rm`, 'rm', $(rm ...) all match — an alias-escape or
+        # full path must not slip the check. Deliberately conservative: cp/tee/ln
+        # also count, so copying FROM the raid can false-positive; the block
+        # message tells the user to run such a command themselves.
+        B='(^|[^[:alnum:]_.-])'
         destructive=0
         if printf '%s' "$cmd" | grep -Eq \
-            -e '(^|[;&|[:space:]$(])(rm|shred|unlink|rmdir|mv|truncate)([[:space:]]|$)' \
-            -e '(^|[;&|[:space:]$(])rsync[^;&|]*--delete' \
-            -e '(^|[;&|[:space:]$(])find[[:space:]][^;&|]*[[:space:]]-(delete|exec|ok|fprint[f0]?|fls)([[:space:]]|$)' \
-            -e '(^|[;&|[:space:]$(])dd[[:space:]][^;&|]*of=' \
-            -e '(^|[;&|[:space:]$(])mkfs[.[:alnum:]]*([[:space:]]|$)' \
-            -e '(^|[;&|[:space:]$(])chattr[[:space:]][^;&|]*-i' \
+            -e "${B}(rm|shred|unlink|rmdir|mv|truncate|tee|cp|ln)([^[:alnum:]_.-]|[[:space:]]|\$)" \
+            -e "${B}rsync[^;&|]*[[:space:]]--del" \
+            -e "${B}find[[:space:]][^;&|]*[[:space:]]-(delete|exec(dir)?|ok(dir)?|fprint[f0]?|fls)([[:space:]]|\$)" \
+            -e "${B}dd[[:space:]][^;&|]*of=" \
+            -e "${B}mkfs[.[:alnum:]]*([[:space:]]|\$)" \
+            -e "${B}chattr[[:space:]][^;&|]*-i" \
+            -e "${B}sed[[:space:]]([^;&|]*[[:space:]])?-i" \
             ; then
             destructive=1
         fi
-        # Redirection truncating/appending into a protected path.
+        # Redirection truncating/appending into a protected path — including the
+        # noclobber-override >| form. Paths are ERE-escaped before splicing.
         for p in "${protected[@]}"; do
-            if printf '%s' "$cmd" | grep -Eq ">>?[[:space:]]*['\"]?${p}"; then
+            if printf '%s' "$cmd" | grep -Eq ">>?\|?[[:space:]]*['\"]?$(esc_ere "$p")"; then
                 deny "shell redirection into protected path ($p) in: $cmd"
             fi
         done
@@ -101,6 +127,9 @@ case "$tool" in
         if [ "$destructive" = 1 ]; then
             if mentions_protected "$cmd"; then
                 deny "destructive command referencing a protected path: $cmd"
+            fi
+            if glob_targets_protected "$cmd"; then
+                deny "destructive command with a glob that can expand into a protected path: $cmd"
             fi
             if [ -n "$cwd" ] && under_protected "$cwd"; then
                 deny "destructive command while cwd ($cwd) is under a protected path: $cmd"

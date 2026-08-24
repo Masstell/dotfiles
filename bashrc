@@ -173,4 +173,22 @@ export PATH=$HOME/.opencode/bin:$PATH
 # socket; every signature still prompts 1Password). claude-local.sh strips its
 # own socket internally. Note: only shells that source this file get the wrapper;
 # non-bash launchers (IDE plugins) bypass it — see the hardening handoff doc.
-claude() { SSH_AUTH_SOCK= command claude "$@"; }
+#
+# Where ~/.ssh/agent-github exists (registered on GitHub as BOTH an auth and a
+# signing key), agent git traffic and commit signatures use it instead of
+# PersonalKey — socketless sessions can still push and sign, and the signature
+# says which box's agent made the commit. user.signingkey points at the PRIVATE
+# key file so ssh-keygen signs with it directly, no agent involved.
+claude() {
+    local gk="$HOME/.ssh/agent-github"
+    if [[ -f "$gk" ]]; then
+        SSH_AUTH_SOCK= \
+        GIT_SSH_COMMAND="ssh -i $gk -o IdentitiesOnly=yes" \
+        GIT_CONFIG_COUNT=1 \
+        GIT_CONFIG_KEY_0=user.signingkey \
+        GIT_CONFIG_VALUE_0="$gk" \
+        command claude "$@"
+    else
+        SSH_AUTH_SOCK= command claude "$@"
+    fi
+}

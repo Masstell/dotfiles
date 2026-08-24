@@ -128,6 +128,22 @@ case "$tool" in
             fi
         done
 
+        # Cross-box travel as the human (post-incident rule): an agent session
+        # is socketless — the launchers strip SSH_AUTH_SOCK — so ssh toward the
+        # LAN can only fail or password-prompt, and the design answer is the
+        # Exchange airlock. Block it with directions instead. claude-trusted
+        # sessions keep the socket and skip this rule: travel there is
+        # deliberate, human-launched, and 1Password-approved per signature.
+        if [ -z "${SSH_AUTH_SOCK:-}" ] \
+            && printf '%s' "$cmd" | grep -Eq "${B}(ssh|scp|sftp|rsync)([^[:alnum:]_.-]|\$)" \
+            && printf '%s' "$cmd" | grep -Eq \
+                -e '192\.168\.1\.' \
+                -e "${B}(matthswen|matt)@" \
+                -e "${B}(inference|mattserver|dnsmedia)([^[:alnum:]_.-]|\$)"; then
+            deny "cross-box remote access from an agent session: $cmd
+Agents never travel between boxes as the human. Move files through the Exchange airlock instead: //192.168.1.3/Exchange (on inference: /mnt/exchange, automounts on access; on the media box: /mnt/raid/Exchange directly; on Windows: the mapped Exchange drive). If a remote shell is genuinely needed, ask the human — they can run it themselves or launch claude-trusted."
+        fi
+
         if [ "$destructive" = 1 ]; then
             if mentions_protected "$cmd"; then
                 deny "destructive command referencing a protected path: $cmd"

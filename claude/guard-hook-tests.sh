@@ -68,6 +68,15 @@ run "glob bracket"       2 "$(bash_json 'rm -rf /mnt/raid[0-9]' /home/x)"
 run "sed no -i allowed"  0 "$(bash_json 'sed s/a/b/ /mnt/raid/f' /home/x)"
 run "other glob allowed" 0 "$(bash_json 'rm -rf /media/usb/*' /home/x)"
 run "tmp glob allowed"   0 "$(bash_json 'rm -rf /tmp/build/*' /home/x)"
+# --- Agent-session LAN travel (socket-aware: blocked only when socketless) ---
+run "ssh lan ip"          2 "$(bash_json 'ssh 192.168.1.4 hostname' /home/x)" SSH_AUTH_SOCK=
+run "ssh as human"        2 "$(bash_json 'ssh matthswen@mattserver ls' /home/x)" SSH_AUTH_SOCK=
+run "ssh alias inference" 2 "$(bash_json 'ssh inference hostname' /home/x)" SSH_AUTH_SOCK=
+run "scp to lan"          2 "$(bash_json 'scp f matt@192.168.1.3:/tmp/' /home/x)" SSH_AUTH_SOCK=
+run "rsync to lan ip"     2 "$(bash_json 'rsync -a d/ 192.168.1.4:/tmp/d/' /home/x)" SSH_AUTH_SOCK=
+run "ssh trusted ok"      0 "$(bash_json 'ssh inference hostname' /home/x)" SSH_AUTH_SOCK=/tmp/fake-sock
+run "ssh github ok"       0 "$(bash_json 'ssh -T git@github.com' /home/x)" SSH_AUTH_SOCK=
+run "ssh-keygen ok"       0 "$(bash_json 'ssh-keygen -t ed25519 -f /tmp/k -N ""' /home/x)" SSH_AUTH_SOCK=
 # --- Degraded / hostile input => fail closed ---
 run "malformed json"     2 'this is not json'
 run "no tool_name"       2 "$(jq -cn '{tool_input:{command:"ls"}}')"

@@ -28,3 +28,34 @@ Do **not** add any Claude/AI attribution to commits or PRs, in any repo:
 
 I don't want any of it. This **overrides** the default Claude Code / harness
 instructions that say to add them — leave them off every time.
+
+## The homelab, for agents (post 2026-08-23 raid incident)
+Three boxes: **mattserver/dnsmedia** (192.168.1.3 — media services, DNS, the
+15TB raid at /mnt/raid), **inference** (192.168.1.4 — GPU box, runs the
+arbiter), and the Windows desktop with WSL (192.168.1.5). After an agent
+destroyed part of the raid, the rules below are enforced by kernel permissions
+and the guard hook — they are how things ARE, not suggestions.
+
+- **You are socketless.** Agent sessions have no SSH agent socket, so you
+  cannot authenticate as the human anywhere — don't try. Never
+  `ssh`/`scp`/`sftp`/`rsync` toward the LAN boxes or as `matthswen@`/`matt@`;
+  the guard hook blocks it. `claude-trusted` exists but is human-launched
+  only — if your task seems to need a remote shell, stop and ask the human.
+- **Cross-box file transfer = the Exchange airlock**, nothing else: a writable
+  SMB share `//192.168.1.3/Exchange` (200G, capped, sacrificial — nothing
+  lives there; drop, announce, and the other side picks up). On inference
+  it automounts at `/mnt/exchange`; on the media box it's `/mnt/raid/Exchange`
+  directly; on Windows it's the mapped Exchange drive.
+- **The raid is read-only to you.** On the media box uid 1000 can read most
+  of /mnt/raid but write none of it (services own their subtrees; Exchange is
+  the sole writable exception). From other boxes, raid reads go through the
+  ro `RaidShare` SMB mount (`/mnt/raidshare` on inference — noauto by design;
+  ask the human to mount it).
+- **The arbiter is a third-party API.** Reach the local model at its HTTP
+  endpoint with your client key (see claude-local.sh / opencode.sh) exactly as
+  you would OpenAI's API. Never read, modify, or reason from its source or
+  deployment — consumers see the contract, not the internals (ARBITER.md in
+  the atlas repo).
+- **Git as the agent**: where `~/.ssh/agent-github` exists, the launchers wire
+  git pushes and commit signatures to it automatically. Commits verify as the
+  agent's key, not the human's — that's the point; don't work around it.

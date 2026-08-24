@@ -111,5 +111,15 @@ fi
 # process. Supervised cross-box work uses `claude-trusted` instead.
 unset SSH_AUTH_SOCK
 
+# Agent git identity: where the box has an agent-github key (registered on
+# GitHub as auth + signing), git traffic and commit signatures use it — a
+# socketless session can still push and sign, as the agent, not the human.
+if [[ -f "$HOME/.ssh/agent-github" ]]; then
+    export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/agent-github -o IdentitiesOnly=yes"
+    export GIT_CONFIG_COUNT=1
+    export GIT_CONFIG_KEY_0=user.signingkey
+    export GIT_CONFIG_VALUE_0="$HOME/.ssh/agent-github"
+fi
+
 echo "claude-local: ${MODEL} via ${CLAUDE_LOCAL_URL} (ctx ${MODEL_CTX:-unknown})" >&2
 exec claude "$@"

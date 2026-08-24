@@ -98,7 +98,10 @@ fi
 [ -f /etc/bash_completion ] && source /etc/bash_completion # source bash_completion if it exists
 
 # use oh-my-posh, fallback to prompt_command
-[ -d ~/.local ] && export PATH=$PATH:~/.local/bin
+# ~/.local/bin PREPENDED deliberately: the docker read-only shim (and any
+# user-level override) must win over /usr/bin. This is also systemd's default
+# user-PATH order.
+[ -d ~/.local ] && export PATH=~/.local/bin:$PATH
 if command -v oh-my-posh &> /dev/null; then
         eval "$(oh-my-posh init bash --config ~/.dotfiles/ohmyposhv3.json)"
         function set_poshcontext(){

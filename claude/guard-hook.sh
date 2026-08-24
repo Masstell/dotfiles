@@ -73,13 +73,17 @@ glob_targets_protected() {
 
 # Escape a string for safe splicing into an ERE — a protected path containing
 # regex metacharacters (/mnt/raid[old]) must not break the pattern or fail open.
-esc_ere() { printf '%s' "$1" | sed 's/[][\\.|$(){}?+*^]/\\&/g'; }
+esc_ere() { printf '%s' "$1" | sed 's/[][\.|$(){}?+*^]/\\&/g'; }
 
-# True if $1 (a directory path) is at or under any protected prefix.
+# True if $1 (a directory path) starts with any protected prefix. The bare
+# prefix match is DELIBERATE, not sloppy: the builtin /mnt/raid must also cover
+# sibling mounts of the same array under other names (/mnt/raidshare on the
+# client boxes — the mount the incident's rm actually traversed). Over-matching
+# /mnt/raid-old etc. blocks in the safe direction.
 under_protected() {
     local d="$1" p
     for p in "${protected[@]}"; do
-        case "$d" in "$p"|"$p"/*|"$p"*) return 0 ;; esac
+        case "$d" in "$p"*) return 0 ;; esac
     done
     return 1
 }
@@ -106,7 +110,7 @@ case "$tool" in
         B='(^|[^[:alnum:]_.-])'
         destructive=0
         if printf '%s' "$cmd" | grep -Eq \
-            -e "${B}(rm|shred|unlink|rmdir|mv|truncate|tee|cp|ln)([^[:alnum:]_.-]|[[:space:]]|\$)" \
+            -e "${B}(rm|shred|unlink|rmdir|mv|truncate|tee|cp|ln)([^[:alnum:]_.-]|\$)" \
             -e "${B}rsync[^;&|]*[[:space:]]--del" \
             -e "${B}find[[:space:]][^;&|]*[[:space:]]-(delete|exec(dir)?|ok(dir)?|fprint[f0]?|fls)([[:space:]]|\$)" \
             -e "${B}dd[[:space:]][^;&|]*of=" \

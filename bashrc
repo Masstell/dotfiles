@@ -166,3 +166,11 @@ fi
 
 # opencode
 export PATH=$HOME/.opencode/bin:$PATH
+
+# Agent lockdown (post 2026-08-23 incident): plain `claude` runs SOCKETLESS — the
+# session cannot request PersonalKey signatures, so agents never act as the human
+# across boxes. `claude-trusted` is the deliberate exception (preserves the
+# socket; every signature still prompts 1Password). claude-local.sh strips its
+# own socket internally. Note: only shells that source this file get the wrapper;
+# non-bash launchers (IDE plugins) bypass it — see the hardening handoff doc.
+claude() { SSH_AUTH_SOCK= command claude "$@"; }

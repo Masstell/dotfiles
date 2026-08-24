@@ -77,6 +77,20 @@ run "rsync to lan ip"     2 "$(bash_json 'rsync -a d/ 192.168.1.4:/tmp/d/' /home
 run "ssh trusted ok"      0 "$(bash_json 'ssh inference hostname' /home/x)" SSH_AUTH_SOCK=/tmp/fake-sock
 run "ssh github ok"       0 "$(bash_json 'ssh -T git@github.com' /home/x)" SSH_AUTH_SOCK=
 run "ssh-keygen ok"       0 "$(bash_json 'ssh-keygen -t ed25519 -f /tmp/k -N ""' /home/x)" SSH_AUTH_SOCK=
+# --- Docker escalation shapes => block (any session, socket irrelevant) ---
+run "docker -v root"      2 "$(bash_json 'docker run -v /:/host alpine sh' /home/x)"
+run "docker vol etc"      2 "$(bash_json 'docker run --volume /etc:/etc alpine' /home/x)"
+run "docker privileged"   2 "$(bash_json 'docker run --privileged alpine' /home/x)"
+run "docker pid host"     2 "$(bash_json 'docker run --pid=host alpine' /home/x)"
+run "docker cap-add"      2 "$(bash_json 'docker run --cap-add SYS_ADMIN alpine' /home/x)"
+run "docker sock mount"   2 "$(bash_json 'docker run -v /var/run/docker.sock:/s alpine' /home/x)"
+run "docker mount src /"  2 "$(bash_json 'docker run --mount type=bind,source=/,target=/h alpine' /home/x)"
+run "podman privileged"   2 "$(bash_json 'podman run --privileged alpine' /home/x)"
+run "docker ps ok"        0 "$(bash_json 'docker ps -a' /home/x)"
+run "docker logs ok"      0 "$(bash_json 'docker logs -f setmatch-api' /home/x)"
+run "docker build ok"     0 "$(bash_json 'docker build -t x .' /home/x)"
+run "compose config ok"   0 "$(bash_json 'docker compose -f deploy/docker-compose.yml config -q' /home/x)"
+run "proj volume ok"      0 "$(bash_json 'docker run -v /tmp/data:/data alpine' /home/x)"
 # --- Degraded / hostile input => fail closed ---
 run "malformed json"     2 'this is not json'
 run "no tool_name"       2 "$(jq -cn '{tool_input:{command:"ls"}}')"

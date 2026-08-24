@@ -144,6 +144,23 @@ case "$tool" in
 Agents never travel between boxes as the human. Move files through the Exchange airlock instead: //192.168.1.3/Exchange (on inference: /mnt/exchange, automounts on access; on the media box: /mnt/raid/Exchange directly; on Windows: the mapped Exchange drive). If a remote shell is genuinely needed, ask the human — they can run it themselves or launch claude-trusted."
         fi
 
+        # Docker escalation shapes (post-incident): docker-group membership is
+        # root-equivalence, and even after the group removal these patterns
+        # have no legitimate agent use. Blocked in every guarded session —
+        # a human who genuinely needs one runs it in their own shell.
+        if printf '%s' "$cmd" | grep -Eq "${B}(docker|podman|nerdctl)([^[:alnum:]_.-]|\$)" \
+            && printf '%s' "$cmd" | grep -Eq \
+                -e '--privileged' \
+                -e '--pid[= ]host' \
+                -e '--cap-add' \
+                -e '--userns[= ]host' \
+                -e 'docker\.sock' \
+                -e '(-v|--volume)[= ]+["'"'"']?/(etc|root|var|usr|boot|bin|sbin|lib|home)?[/:,"'"'"']' \
+                -e '--mount[= ][^;&|]*source=/(etc|root|var|usr|boot|bin|sbin|lib|home)?([,/]|[[:space:]]|$)'; then
+            deny "container-escalation pattern in: $cmd
+Mounting host system paths, --privileged, host namespaces, or the docker socket is root-equivalence — no agent task needs it. If this is genuinely intended, the human runs it themselves."
+        fi
+
         if [ "$destructive" = 1 ]; then
             if mentions_protected "$cmd"; then
                 deny "destructive command referencing a protected path: $cmd"

@@ -43,9 +43,10 @@ and the guard hook — they are how things ARE, not suggestions.
   only — if your task seems to need a remote shell, stop and ask the human.
 - **Cross-box file transfer = the Exchange airlock**, nothing else: a writable
   SMB share `//192.168.1.3/Exchange` (200G, capped, sacrificial — nothing
-  lives there; drop, announce, and the other side picks up). On inference
-  it automounts at `/mnt/exchange`; on the media box it's `/mnt/raid/Exchange`
-  directly; on Windows it's the mapped Exchange drive.
+  lives there; drop, announce, and the other side picks up). The path is
+  **`/mnt/exchange` on every Linux box** (the hosting box symlinks it into
+  the raid); on Windows it's the mapped Exchange drive. If a write there is
+  refused, the share isn't attached — say so, don't sudo around it.
 - **The raid is read-only to you.** On the media box uid 1000 can read most
   of /mnt/raid but write none of it (services own their subtrees; Exchange is
   the sole writable exception). From other boxes, raid reads go through the

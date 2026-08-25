@@ -141,7 +141,7 @@ case "$tool" in
                 -e "${B}(matthswen|matt)@" \
                 -e "${B}(inference|mattserver|dnsmedia)([^[:alnum:]_.-]|\$)"; then
             deny "cross-box remote access from an agent session: $cmd
-Agents never travel between boxes as the human. Move files through the Exchange airlock instead: //192.168.1.3/Exchange (on inference: /mnt/exchange, automounts on access; on the media box: /mnt/raid/Exchange directly; on Windows: the mapped Exchange drive). If a remote shell is genuinely needed, ask the human — they can run it themselves or launch claude-trusted."
+Agents never travel between boxes as the human. Move files through the Exchange airlock instead: /mnt/exchange on every Linux box (//192.168.1.3/Exchange; mapped drive on Windows). If a remote shell is genuinely needed, ask the human — they can run it themselves or launch claude-trusted."
         fi
 
         # Docker escalation shapes (post-incident): docker-group membership is

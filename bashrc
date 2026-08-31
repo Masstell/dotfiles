@@ -102,6 +102,15 @@ fi
 # user-level override) must win over /usr/bin. This is also systemd's default
 # user-PATH order.
 [ -d ~/.local ] && export PATH=~/.local/bin:$PATH
+
+# nvm — Node version manager. Bootstrapped by ~/.dotfiles/install.sh when the
+# system node is too old for pi (which needs Node >=22.19). Sourcing it here
+# makes `node`/`npm`/`nvm` and the default (Node 22) available in interactive
+# shells; the -s guards make the whole block a no-op when nvm isn't installed.
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+
 if command -v oh-my-posh &> /dev/null; then
         eval "$(oh-my-posh init bash --config ~/.dotfiles/ohmyposhv3.json)"
         function set_poshcontext(){

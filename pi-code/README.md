@@ -24,6 +24,8 @@ pi-code/
 
 ## Prerequisites
 
+- Node >=22.19 — required by pi. `./install.sh` bootstraps it via nvm (no sudo)
+  when the system node is too old.
 - `pi` on PATH — `./install.sh` auto-installs it if missing (or
   `npm install -g --ignore-scripts @earendil-works/pi-coding-agent` by hand)
 - An arbiter key in `../.env`. It reuses `OPENCODE_ARBITER_KEY` /
@@ -161,10 +163,12 @@ default in `bash-classifier.ts` is used.
 
 ## Install onto PATH
 
-`../install.sh` handles this automatically: if `pi` is missing it installs it
-(`npm install -g --ignore-scripts @earendil-works/pi-coding-agent`), symlinks the
-pi binary into `~/.local/bin` (npm's global prefix `~/.npm-global/bin` is *not*
-on PATH; `~/.local/bin` is — see `bashrc`), and symlinks `pi-local.sh` →
+`../install.sh` handles this automatically: it first ensures Node >=22.19 (via
+nvm, no sudo), then if `pi` is missing installs it into a user-writable prefix
+(`npm install -g --ignore-scripts --prefix ~/.npm-global @earendil-works/pi-coding-agent`
+— so no sudo even when npm's default global prefix is root-owned like
+`/usr/local`), symlinks the pi binary into `~/.local/bin` (`~/.npm-global/bin` is
+*not* on PATH; `~/.local/bin` is — see `bashrc`), and symlinks `pi-local.sh` →
 `~/.local/bin/pi-local`. So a fresh machine just needs `./install.sh`, then
 `pi-local`.
 

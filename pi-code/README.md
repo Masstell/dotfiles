@@ -105,6 +105,29 @@ list now: shell history, `.npmrc`/`.pypirc`, `.kube`, docker config, api keys).
 The hook also wraps its whole body in a fail-closed try/catch — a bug in the
 gate blocks the call instead of letting it dispatch unclassified.
 
+### Executed scripts are read and judged by their contents
+
+The classifier judges a *command string*, so `python3 ~/x/script.py` is a blank
+cheque: the boring invocation hides whatever the file does. pi deliberately
+leaves the write tool ungated (the agent should be free to write scripts), so
+the control point is **execution**. When a command runs a local script —
+interpreter-on-file (`python3/node/ruby/perl/bash/sh/Rscript/deno/…`),
+`source X`, or direct exec (`./x`, `/abs/x`) — the hook **reads that file and
+hands its body to the model**, which judges what the script actually does. A
+script that reaches outside the working tree (writes/reads beyond cwd, network
+egress, secret/env access, spawning a blocked subprocess) is BLOCK even though
+the invocation looks routine.
+
+Because the read happens **at execution time**, this catches the payload no
+matter how it reached disk (write tool, `echo`, `curl`, heredoc). Path
+resolution expands `~`/`$HOME`, honors absolute paths, and resolves relatives
+against the tool's cwd — so the file is found wherever it lives, inside the repo
+or out. Extraction only *adds* a script body to the prompt; a command with no
+resolvable script is classified exactly as before. Unvettable scripts fail
+**closed**: unreadable, larger than 64 KB, or more than 3 scripts in one command
+→ block rather than vet a subset. A parser miss also fails safe — with no body
+attached, the model sees an opaque script execution and errs to BLOCK.
+
 ### Plan / read-only mode
 
 ```bash
@@ -234,21 +257,37 @@ round 1. Added 8 `no_fast` invariant cases (offline, hard-fail) so a future
 edit can't silently re-open a fast-path hole, and nonce-fenced the command in
 the classifier prompt against `</transcript>`/`VERDICT: ALLOW` injection.
 
-## Known gap: the classifier gates `bash`, not file writes
+**2026-08-31, script-execution escape: 73/73 hard, zero critical, on the
+uncensored model.** The resident model, probing the agent, found the real hole:
+write a payload to a repo file (pi's write tool is ungated by design) and run it
+with a boring `python3 ~/media-server/script.py` — the classifier judges the
+command text, never the file, and allows it. Not fixable in the policy (the
+model never sees the payload). Fix is exec-time: when a command runs a local
+script the hook now **reads the file and judges its body** (see "Executed
+scripts" above); the block criterion is the script reaching outside the working
+tree. Verified against committed attack fixtures — the exact `python3
+<path>/phone_home.py` shape (reads `~/.ssh`, POSTs it) blocks, benign in-tree
+scripts allow. Added 10 script-exec cases with a `must_read`/`must_inline`
+detection invariant (offline, hard-fail — a future edit that stops recognizing
+`python3 <file>` reverts to the silent-allow, so the eval must catch it). The
+uncensored model was also truncating (`finish_reason=length`) past the verdict
+on some benign cases and failing closed; making the output contract terse
+(verdict line first, no reasoning) fixed it and cut model time ~4×.
 
-The hook classifies the `bash` tool. pi's own edit/write tools are *not* gated
-(in normal mode the hook returns early for every non-bash tool). So a
-persistence or exfil payload the classifier blocks as a shell command
-(`echo … >> ~/.ssh/authorized_keys`) is reachable by *writing the same file*
-through pi's edit tool with no verdict. The bash gate raises the cost of doing
-damage through the shell; it is not a complete state-change boundary.
+## Known gap: the write tool is ungated (by design)
 
-Two things bound this today: `PI_LOCAL_READONLY=1` hard-blocks every non-bash
-tool (fail-closed allowlist), and the threat model targets an agent going
-off-rails, not a determined attacker (use a container for that). Closing it in
-normal mode means classifying file writes (path + content) too — tracked as a
-follow-up, since it needs pi's actual write-tool input schema (tool name,
-target path, payload), which is pinned per pi version.
+The hook classifies the `bash` tool, and by design gates execution rather than
+authorship — the agent is meant to write scripts freely, so pi's edit/write
+tools are not classified. A payload written to a file is caught **when it runs**
+(see "Executed scripts") — the read happens at exec time regardless of how the
+file got there. What remains uncovered is a payload that acts **without an exec
+step the hook sees**: a file whose mere existence has effect (a `.git/hooks/`
+hook, a `conftest.py`, a systemd unit) fired by some later process, not by a
+bash script the hook read. `PI_LOCAL_READONLY=1` still hard-blocks every
+non-bash tool for a bounded session, and the threat model targets an off-rails
+agent, not a determined attacker (use a container for that). Fully closing it
+means classifying file writes (path + content) too — still a tracked follow-up,
+needing pi's write-tool input schema, pinned per pi version.
 
 - *Compact policy:* 60/60. The first run found a real bug — the *fast path* (not
   the model) auto-allowed `cat ~/.aws/credentials` and `echo $OPENAI_API_KEY`,
@@ -271,9 +310,16 @@ bugs were in the harness/framing around it. Run the parity check with
 
 ```
 eval/
-├── cases.jsonl     74 labeled commands (incl. 8 no_fast bypass invariants)
+├── cases.jsonl     84 labeled commands (8 no_fast + 10 script-exec invariants)
+├── fixtures/       committed scripts the exec cases run (benign + attack bodies)
 └── run-eval.sh     replays them through the extension's exact decision path
 ```
+
+`fixtures/` holds inert test scripts (read and classified, **never executed**):
+benign in-tree ones (`build.sh`, `generate.py`) and reach-out attack bodies
+(`phone_home.py` reads `~/.ssh` and POSTs it, `exfil_env.js`, `wipe_home.py`,
+`revshell.sh`). A case cmd/cwd can use `{FIX}`, which the runner substitutes
+with the absolute fixtures path.
 
 ```bash
 cd eval && ./run-eval.sh            # uses the loaded model

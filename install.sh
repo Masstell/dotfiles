@@ -45,7 +45,11 @@ if ! command -v pi >/dev/null 2>&1; then
     NPMBIN="$(npm config get prefix 2>/dev/null)/bin"
     if [ ! -x "$NPMBIN/pi" ] && command -v npm >/dev/null; then
         echo "installing pi (pi.dev coding agent) via npm..."
-        npm install -g --ignore-scripts @earendil-works/pi-coding-agent \
+        # PINNED: pi is pre-1.0 (~weekly releases) and the tool_call hook API
+        # the classifier relies on may shift. An unpinned upgrade that drops the
+        # hook would silently stop gating bash. Bump deliberately after
+        # re-checking pi-code/extensions/ against the new release.
+        npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.2 \
             || echo "pi auto-install failed — install manually: https://pi.dev"
         NPMBIN="$(npm config get prefix 2>/dev/null)/bin"
     fi

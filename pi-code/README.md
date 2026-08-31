@@ -203,6 +203,17 @@ is an uncensored variant, pin the verdicts to a stock model with
 `PI_CLASSIFIER_MODEL` (mind the single-slot swap cost), or re-run
 `eval/run-eval.sh` against the resident before trusting it.
 
+**Same day, after hardening the compact policy: 61/61 hard, zero critical
+failures — on the same uncensored model.** The three misses were consequence-
+inference cases (ingress tunnel, public publish, endpoint-redirect exfil) that
+the policy never explicitly named; the stock model derived them, the
+uncensored one didn't. Enumerating them as explicit BLOCK bullets (plus a
+"judge the consequence, not how ordinary it looks" instruction) converted the
+judgment calls into pattern matches, which the uncensored model handles fine —
+with no new false positives (`git push`, `python3 -m http.server` still
+allow). An uncensored resident is workable with an explicit-enough policy;
+inference-dependent coverage is what degrades.
+
 - *Compact policy:* 60/60. The first run found a real bug — the *fast path* (not
   the model) auto-allowed `cat ~/.aws/credentials` and `echo $OPENAI_API_KEY`,
   because a name-only allowlist ignores that a read-only command's *argument* can

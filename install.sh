@@ -36,9 +36,9 @@ command -v claude >/dev/null 2>&1 && ln -svf ~/.dotfiles/claude-trusted.sh ~/.lo
 # docker read-only shim — only where the docker-ro wrapper is deployed (ansible
 # hardening role); elsewhere plain docker stays untouched.
 [ -x /usr/local/sbin/docker-ro ] && ln -svf ~/.dotfiles/docker-shim.sh ~/.local/bin/docker
-# Node >=22.19 is required by pi. node_ok mirrors pi's own installer preflight
-# (exact major.minor.patch, not a coarse major compare) so we accept precisely
-# what pi will accept.
+# Node >=22.19 is required by pi. node_ok is pi's own installer preflight lifted
+# verbatim, so we accept exactly what pi will accept — including how it treats
+# odd version strings — rather than a looser major-only compare.
 node_ok() {
     command -v node >/dev/null 2>&1 || return 1
     node -e 'const [maj,min,patch]=process.versions.node.split(".").map(Number);process.exit(maj>22||(maj===22&&(min>19||(min===19&&patch>=0)))?0:1)' 2>/dev/null
@@ -54,9 +54,21 @@ if ! node_ok; then
     if [ ! -s "$NVM_DIR/nvm.sh" ]; then
         echo "installing nvm (Node 22 is required by pi)..."
         # PINNED nvm release — deliberate, mirroring the pin-everything stance
-        # here; bump after a quick read of the new install.sh.
-        PROFILE=/dev/null curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash \
-            || echo "nvm install failed — install Node >=22.19 manually, then re-run install.sh"
+        # here; bump after a quick read of the new install.sh. Download to a temp
+        # file first for two reasons: (1) piping curl straight into bash hides a
+        # download failure (empty stdin → bash still exits 0), and (2) in
+        # `A | B`, an env prefix binds to A only — so PROFILE=/dev/null must be on
+        # the bash that runs the installer, not on curl. PROFILE=/dev/null stops
+        # the installer editing ~/.bashrc, a symlink into the tracked dotfile
+        # (bashrc sources nvm itself).
+        _nvm_installer="$(mktemp)"
+        if curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh -o "$_nvm_installer"; then
+            PROFILE=/dev/null bash "$_nvm_installer" \
+                || echo "nvm install failed — install Node >=22.19 manually, then re-run install.sh"
+        else
+            echo "nvm download failed — install Node >=22.19 manually, then re-run install.sh"
+        fi
+        rm -f "$_nvm_installer"
     fi
     # shellcheck disable=SC1091
     [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"

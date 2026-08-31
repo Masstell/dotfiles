@@ -36,6 +36,22 @@ command -v claude >/dev/null 2>&1 && ln -svf ~/.dotfiles/claude-trusted.sh ~/.lo
 # docker read-only shim — only where the docker-ro wrapper is deployed (ansible
 # hardening role); elsewhere plain docker stays untouched.
 [ -x /usr/local/sbin/docker-ro ] && ln -svf ~/.dotfiles/docker-shim.sh ~/.local/bin/docker
+# pi coding agent (pi.dev) — the local-model launcher + classifier live in
+# pi-code/. Auto-install pi if missing (npm global, --ignore-scripts, mirroring
+# the official installer minus its pipe-to-shell), then symlink the pi binary
+# into ~/.local/bin — npm's global prefix (~/.npm-global/bin) is NOT on PATH,
+# but ~/.local/bin is (see bashrc). Finally symlink the pi-local launcher.
+if ! command -v pi >/dev/null 2>&1; then
+    NPMBIN="$(npm config get prefix 2>/dev/null)/bin"
+    if [ ! -x "$NPMBIN/pi" ] && command -v npm >/dev/null; then
+        echo "installing pi (pi.dev coding agent) via npm..."
+        npm install -g --ignore-scripts @earendil-works/pi-coding-agent \
+            || echo "pi auto-install failed — install manually: https://pi.dev"
+        NPMBIN="$(npm config get prefix 2>/dev/null)/bin"
+    fi
+    [ -x "$NPMBIN/pi" ] && ln -svf "$NPMBIN/pi" ~/.local/bin/pi
+fi
+command -v pi >/dev/null 2>&1 && ln -svf ~/.dotfiles/pi-code/pi-local.sh ~/.local/bin/pi-local
 
 # Agent skills — shared across Copilot CLI, Codex, Claude Code, and opencode
 mkdir -p ~/.agents/skills ~/.claude/skills ~/.config/opencode/skills

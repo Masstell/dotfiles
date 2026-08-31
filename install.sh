@@ -44,37 +44,41 @@ node_ok() {
     node -e 'const [maj,min,patch]=process.versions.node.split(".").map(Number);process.exit(maj>22||(maj===22&&(min>19||(min===19&&patch>=0)))?0:1)' 2>/dev/null
 }
 
-# Provide Node 22 via nvm (reusable, no sudo) when the system node is missing or
-# too old. The nvm SOURCE lines live in the tracked bashrc; here we only
-# bootstrap + select 22 for THIS script run so the pinned pi install below runs
-# against node 22's npm. PROFILE=/dev/null stops nvm's installer from writing
-# through the ~/.bashrc symlink into the tracked dotfile (bashrc sources nvm).
-if ! node_ok; then
-    export NVM_DIR="$HOME/.nvm"
-    if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-        echo "installing nvm (Node 22 is required by pi)..."
-        # PINNED nvm release — deliberate, mirroring the pin-everything stance
-        # here; bump after a quick read of the new install.sh. Download to a temp
-        # file first for two reasons: (1) piping curl straight into bash hides a
-        # download failure (empty stdin → bash still exits 0), and (2) in
-        # `A | B`, an env prefix binds to A only — so PROFILE=/dev/null must be on
-        # the bash that runs the installer, not on curl. PROFILE=/dev/null stops
-        # the installer editing ~/.bashrc, a symlink into the tracked dotfile
-        # (bashrc sources nvm itself).
-        _nvm_installer="$(mktemp)"
-        if curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh -o "$_nvm_installer"; then
-            PROFILE=/dev/null bash "$_nvm_installer" \
-                || echo "nvm install failed — install Node >=22.19 manually, then re-run install.sh"
-        else
-            echo "nvm download failed — install Node >=22.19 manually, then re-run install.sh"
-        fi
-        rm -f "$_nvm_installer"
+# Provide Node 22 via nvm (reusable, no sudo). Two responsibilities: bootstrap
+# nvm when the system node is too old for pi, AND — whenever nvm is present — pin
+# 22 as nvm's DEFAULT. The default matters because the tracked bashrc sources nvm
+# unconditionally; on a box with a pre-existing nvm whose default is older, that
+# sourcing would silently downgrade `node` in every interactive shell. The nvm
+# SOURCE lines live in bashrc; here we bootstrap + select 22 for THIS run too, so
+# the pinned pi install below uses node 22's npm.
+export NVM_DIR="$HOME/.nvm"
+if ! node_ok && [ ! -s "$NVM_DIR/nvm.sh" ]; then
+    echo "installing nvm (Node 22 is required by pi)..."
+    # PINNED nvm release — deliberate, mirroring the pin-everything stance here;
+    # bump after a quick read of the new install.sh. Download to a temp file
+    # first for two reasons: (1) piping curl straight into bash hides a download
+    # failure (empty stdin → bash still exits 0), and (2) in `A | B`, an env
+    # prefix binds to A only — so PROFILE=/dev/null must be on the bash that runs
+    # the installer, not on curl. PROFILE=/dev/null stops the installer editing
+    # ~/.bashrc, a symlink into the tracked dotfile (bashrc sources nvm itself).
+    _nvm_installer="$(mktemp)"
+    if curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh -o "$_nvm_installer"; then
+        PROFILE=/dev/null bash "$_nvm_installer" \
+            || echo "nvm install failed — install Node >=22.19 manually, then re-run install.sh"
+    else
+        echo "nvm download failed — install Node >=22.19 manually, then re-run install.sh"
     fi
-    # shellcheck disable=SC1091
-    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-    if command -v nvm >/dev/null 2>&1; then
-        nvm install 22 && nvm alias default 22 >/dev/null
-    fi
+    rm -f "$_nvm_installer"
+fi
+# shellcheck disable=SC1091
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+if command -v nvm >/dev/null 2>&1; then
+    # Idempotent: installs 22 only if missing, then pins it as the login default
+    # so bashrc's nvm sourcing resolves `node` to 22 on every box, regardless of
+    # any pre-existing default. Only runs when nvm is actually present — a box
+    # with a fine system node and no nvm is left untouched (node_ok short-circuits
+    # the bootstrap above, and this guard is false).
+    nvm install 22 >/dev/null && nvm alias default 22 >/dev/null
 fi
 
 # pi coding agent (pi.dev) — the local-model launcher + classifier live in
@@ -96,8 +100,12 @@ if ! command -v pi >/dev/null 2>&1; then
             # hook would silently stop gating bash. Bump deliberately after
             # re-checking pi-code/extensions/ against the new release.
             npm install -g --ignore-scripts --prefix "$PI_PREFIX" \
-                @earendil-works/pi-coding-agent@0.84.2 \
-                || echo "pi auto-install failed — install manually: https://pi.dev"
+                @earendil-works/pi-coding-agent@0.84.2
+            # Verify the real outcome, not just npm's exit code: npm can exit 0
+            # yet land the bin elsewhere, which would skip the symlink below and
+            # otherwise report success silently.
+            [ -x "$NPMBIN/pi" ] \
+                || echo "pi auto-install failed (no binary at $NPMBIN/pi) — install manually: https://pi.dev"
         else
             echo "skipping pi install — Node >=22.19 not found (have $(node -v 2>/dev/null || echo none)); install Node 22 (nvm) and re-run install.sh"
         fi

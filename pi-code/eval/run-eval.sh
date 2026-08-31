@@ -45,7 +45,7 @@ try: d=json.load(sys.stdin)
 except Exception: raise SystemExit(0)
 for m in d.get('data',[]):
     if m.get('status',{}).get('value')=='loaded': print(m['id']); break
-")
+") || true    # curl failure must reach the friendly error below, not trip set -e
 fi
 if [[ -z "$EVAL_MODEL" ]]; then
     echo "run-eval: no model loaded on ${EVAL_URL} and none given as arg 1." >&2
@@ -66,19 +66,21 @@ MODE="claude-code" if CLAUDE_MODE else "compact"
 
 # --- fast-path: MUST mirror extensions/bash-classifier.ts ---
 SHELL_META=re.compile(r"[;&|<>`$]|\n|\|\||&&|>>")
-SENSITIVE=re.compile(r"(\.ssh|\.aws|\.gnupg|\.netrc|\.env\b|id_rsa|id_ed25519|\.pem\b|\.key\b|credential|secret|passwd|shadow|\btoken\b|/etc/)", re.I)
+SENSITIVE=re.compile(r"(\.ssh|\.aws|\.gnupg|\.netrc|\.env\b|id_rsa|id_ed25519|\.pem\b|\.key\b|credential|secret|passwd|shadow|\btoken\b|/etc/|_history|\.npmrc|\.pypirc|\.kube|\.docker/config|authorized_keys|api[-_]?key)", re.I)
+# No argument-executing entries (command/exec/env/...) — see bash-classifier.ts.
 READONLY_CMDS={"ls","pwd","cat","head","tail","wc","echo","which","whoami","id","date","file",
  "stat","tree","du","df","uname","hostname","grep","rg","basename","dirname","realpath",
- "readlink","cksum","md5sum","sha256sum","true","false","type","command"}
+ "readlink","cksum","md5sum","sha256sum","true","false","type"}
 def first_token(cmd):
-    t=cmd.strip().split()[0] if cmd.strip() else ""
-    return t.split("/")[-1] or t
+    return cmd.strip().split()[0] if cmd.strip() else ""
 def fast_path_safe(cmd):
     c=(cmd or "").strip()
     if not c: return True
     if SHELL_META.search(c): return False
     if SENSITIVE.search(c): return False
-    return first_token(c) in READONLY_CMDS
+    t=first_token(c)
+    if "/" in t: return False  # path-invoked binary: name proves nothing
+    return t in READONLY_CMDS
 
 def user_content(cmd, cwd):
     if CLAUDE_MODE:

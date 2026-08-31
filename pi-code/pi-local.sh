@@ -77,7 +77,9 @@ for m in data.get('data', []):
 " 2>/dev/null
 }
 
-IFS=$'\t' read -r MODEL MODEL_CTX < <(get_loaded_model)
+# `|| true`: read returns 1 at EOF when nothing was discovered; without it,
+# set -e kills the script before the friendly error below can print.
+IFS=$'\t' read -r MODEL MODEL_CTX < <(get_loaded_model) || true
 if [[ -z "${MODEL:-}" ]]; then
     echo "pi-local: no model is loaded on ${PI_ARBITER_URL} (or the key was rejected)." >&2
     exit 1

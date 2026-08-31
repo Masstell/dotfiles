@@ -26,7 +26,12 @@ import { readFileSync } from "node:fs";
 
 const ARBITER_URL = (process.env.PI_ARBITER_URL || "https://ai.mswensen.com").replace(/\/+$/, "");
 const KEY = process.env.PI_ARBITER_KEY || "";
-const MODEL = process.env.PI_ARBITER_MODEL || "";
+// PI_CLASSIFIER_MODEL pins the safety verdicts to a specific model regardless
+// of which model the agent itself runs on. The classifier is only as good as
+// the model judging it — an uncensored/abliterated resident measurably passes
+// commands a stock model blocks (see README "Validated"). Caveat: naming an
+// unloaded model makes the arbiter swap per request on a single-slot box.
+const MODEL = process.env.PI_CLASSIFIER_MODEL || process.env.PI_ARBITER_MODEL || "";
 // Policy file: PI_LOCAL_POLICY wins (e.g. point it at policy/claude-code-full.md
 // to run the full captured Claude Code policy), else the compact default.
 const POLICY_PATH =
@@ -94,18 +99,19 @@ const POLICY = loadPolicy();
 //      secret if its ARGUMENT points at one (cat ~/.ssh/id_rsa, grep pw creds).
 const SHELL_META = /[;&|<>`$]|\n|\|\||&&|>>/; // note: `$` covers $(, ${, and bare $VAR
 const SENSITIVE =
-  /(\.ssh|\.aws|\.gnupg|\.netrc|\.env\b|id_rsa|id_ed25519|\.pem\b|\.key\b|credential|secret|passwd|shadow|\btoken\b|\/etc\/)/i;
+  /(\.ssh|\.aws|\.gnupg|\.netrc|\.env\b|id_rsa|id_ed25519|\.pem\b|\.key\b|credential|secret|passwd|shadow|\btoken\b|\/etc\/|_history|\.npmrc|\.pypirc|\.kube|\.docker\/config|authorized_keys|api[-_]?key)/i;
+// No entry here may execute its ARGUMENT: `command`/`exec`/`env`/`nice`/
+// `xargs`-style wrappers turn "readonly-cmd <anything>" into "<anything>",
+// which would ride the fast path around the classifier entirely.
 const READONLY_CMDS = new Set([
   "ls", "pwd", "cat", "head", "tail", "wc", "echo", "which", "whoami", "id",
   "date", "file", "stat", "tree", "du", "df", "uname", "hostname", "grep",
   "rg", "basename", "dirname", "realpath", "readlink", "cksum", "md5sum",
-  "sha256sum", "true", "false", "type", "command",
+  "sha256sum", "true", "false", "type",
 ]);
 
 function firstToken(cmd: string): string {
-  const t = cmd.trim().split(/\s+/)[0] || "";
-  // strip a leading path (e.g. /usr/bin/ls -> ls)
-  return t.split("/").pop() || t;
+  return cmd.trim().split(/\s+/)[0] || "";
 }
 
 function fastPathSafe(cmd: string): boolean {
@@ -113,13 +119,21 @@ function fastPathSafe(cmd: string): boolean {
   if (!c) return true; // empty command is a no-op
   if (SHELL_META.test(c)) return false;
   if (SENSITIVE.test(c)) return false;
-  return READONLY_CMDS.has(firstToken(c));
+  // Bare names only: a path-invoked binary (./ls, /tmp/x/cat) can be ANY
+  // executable that merely shares an allowlisted name — classify it.
+  const t = firstToken(c);
+  if (t.includes("/")) return false;
+  return READONLY_CMDS.has(t);
 }
 
 // --- Read-only / plan mode ---------------------------------------------------
-const WRITE_TOOL = /(write|edit|patch|create|delete|remove|move|rename|mkdir|apply)/i;
-function isWriteTool(name: string): boolean {
-  return WRITE_TOOL.test(name || "");
+// Fail-closed ALLOWLIST, not a write-verb blocklist: a blocklist misses any
+// edit-capable tool whose name lacks the expected verbs (str_replace, fs_put,
+// …). Unknown tools are blocked in plan mode — annoying for a benign tool,
+// never unsafe. Extend this set as pi grows read-only tools.
+const READONLY_TOOLS = new Set(["bash", "read", "grep", "glob", "list", "ls", "find", "fetch"]);
+function isReadOnlyTool(name: string): boolean {
+  return READONLY_TOOLS.has((name || "").toLowerCase());
 }
 
 // --- Classifier call ---------------------------------------------------------
@@ -209,38 +223,47 @@ async function classify(command: string, cwd: string): Promise<Verdict> {
 // --- Hook --------------------------------------------------------------------
 export default function (pi: any) {
   pi.on("tool_call", async (event: any, ctx: any) => {
-    const tool = String(event?.toolName || "");
-    const input = event?.input || {};
+    // Fail closed on our own bugs too: an exception anywhere in the gate must
+    // block the call, not let it dispatch unclassified.
+    try {
+      const tool = String(event?.toolName || "");
+      const input = event?.input || {};
 
-    // Plan / read-only mode: hard gate, no model involved.
-    if (READONLY) {
-      if (isWriteTool(tool)) {
-        return { block: true, reason: "Read-only/plan mode (PI_LOCAL_READONLY): edits are blocked." };
+      // Plan / read-only mode: hard gate, no model involved.
+      if (READONLY) {
+        if (!isReadOnlyTool(tool)) {
+          return { block: true, reason: `Read-only/plan mode (PI_LOCAL_READONLY): tool "${tool}" is not on the read-only allowlist.` };
+        }
+        if (tool === "bash" && !fastPathSafe(String(input.command ?? ""))) {
+          return { block: true, reason: "Read-only/plan mode (PI_LOCAL_READONLY): only read-only bash is allowed." };
+        }
       }
-      if (tool === "bash" && !fastPathSafe(String(input.command ?? ""))) {
-        return { block: true, reason: "Read-only/plan mode (PI_LOCAL_READONLY): only read-only bash is allowed." };
+
+      if (tool !== "bash") return;
+
+      const command = String(input.command ?? "");
+      if (!command.trim()) return;
+      if (fastPathSafe(command)) return; // benign single read-only command
+
+      // Judge against the directory the tool will actually run in, when the
+      // tool input carries one; the launcher cwd is only the fallback.
+      const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+      const verdict = await classify(command, cwd);
+      if (verdict.decision === "block") {
+        try {
+          ctx?.ui?.notify?.(`⛔ bash blocked: ${verdict.reason}`, "warn");
+        } catch {
+          /* headless: no UI */
+        }
+        return {
+          block: true,
+          reason: `Blocked by local safety classifier: ${verdict.reason || "unsafe command"}`,
+        };
       }
+      // ALLOW — dispatch normally.
+      return;
+    } catch (err: any) {
+      return { block: true, reason: `classifier hook error: ${String(err?.message || err)} (failing closed)` };
     }
-
-    if (tool !== "bash") return;
-
-    const command = String(input.command ?? "");
-    if (!command.trim()) return;
-    if (fastPathSafe(command)) return; // benign single read-only command
-
-    const verdict = await classify(command, process.cwd());
-    if (verdict.decision === "block") {
-      try {
-        ctx?.ui?.notify?.(`⛔ bash blocked: ${verdict.reason}`, "warn");
-      } catch {
-        /* headless: no UI */
-      }
-      return {
-        block: true,
-        reason: `Blocked by local safety classifier: ${verdict.reason || "unsafe command"}`,
-      };
-    }
-    // ALLOW — dispatch normally.
-    return;
   });
 }

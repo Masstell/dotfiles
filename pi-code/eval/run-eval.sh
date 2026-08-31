@@ -103,7 +103,11 @@ def script_token_in_segment(seg):
     head=toks[0]; base=_basename(head)
     if head in ("source","."): return toks[1] if len(toks)>1 else ""
     if base in INTERPRETERS:
+        redir=False
         for a in toks[1:]:
+            if redir: return a                       # `interp < file`: stdin file IS the script
+            if a=="<": redir=True; continue
+            if a.startswith("<"): return a[1:]        # `interp <file` glued
             if INLINE_FLAG.match(a): return ""
             if a=="run" and base=="deno": continue
             if a.startswith("-"): continue

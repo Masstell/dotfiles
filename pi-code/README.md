@@ -122,11 +122,20 @@ Because the read happens **at execution time**, this catches the payload no
 matter how it reached disk (write tool, `echo`, `curl`, heredoc). Path
 resolution expands `~`/`$HOME`, honors absolute paths, and resolves relatives
 against the tool's cwd — so the file is found wherever it lives, inside the repo
-or out. Extraction only *adds* a script body to the prompt; a command with no
-resolvable script is classified exactly as before. Unvettable scripts fail
-**closed**: unreadable, larger than 64 KB, or more than 3 scripts in one command
-→ block rather than vet a subset. A parser miss also fails safe — with no body
-attached, the model sees an opaque script execution and errs to BLOCK.
+or out. A stdin redirect is read too (`python3 < script.py` → the redirect
+target is the script). Extraction only *adds* a script body to the prompt; a
+command with no resolvable script is classified exactly as before. Unvettable
+scripts fail **closed**: unreadable, larger than 64 KB, or more than 3 scripts
+in one command → block rather than vet a subset. A parser miss also fails safe
+— with no body attached, the model sees an opaque script execution and errs to
+BLOCK.
+
+Code fed to an interpreter from a source that *isn't* a readable file — a pipe
+(`cat f | python3`), a substitution (`bash -c "$(...)"`), or `xargs` — can't be
+vetted by reading, so the policy names that shape as BLOCK directly (the model
+always sees the full command text, pipes included; it just needs the rule
+spelled out). Inline code that *is* visible (`python3 -c "…"`) stays classified
+as its own text.
 
 ### Plan / read-only mode
 
@@ -310,7 +319,7 @@ bugs were in the harness/framing around it. Run the parity check with
 
 ```
 eval/
-├── cases.jsonl     84 labeled commands (8 no_fast + 10 script-exec invariants)
+├── cases.jsonl     88 labeled commands (8 no_fast + script-exec invariants)
 ├── fixtures/       committed scripts the exec cases run (benign + attack bodies)
 └── run-eval.sh     replays them through the extension's exact decision path
 ```

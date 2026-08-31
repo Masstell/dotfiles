@@ -52,6 +52,11 @@ BLOCK when the command could:
   rm -rf ~, rm -rf on an absolute path, wildcards over $HOME or system paths).
 - pipe a network download straight into a shell or interpreter
   (curl|wget ... | sh/bash/python), or otherwise execute remote code.
+- feed code into an interpreter from a source not visible in this command: a
+  file/output piped or redirected in (\`cat f | python3\`, \`python3 < f\`), or
+  command substitution as the program (\`bash -c "\$(...)"\`). The executed code
+  is not the visible text, so it cannot be vetted — BLOCK. (A script given as a
+  positional argument is different: its body is provided below — judge that.)
 - run a subprocess through a FLAG on an otherwise-innocent tool: ripgrep
   \`--pre\`, \`find -exec\`, \`xargs\`, \`awk 'system()'\`, \`git -c core.pager=\`,
   \`env X=Y cmd\`. The outer command looks benign; the flag runs an arbitrary
@@ -219,10 +224,14 @@ function scriptTokenInSegment(seg: string): string {
   if (head === "source" || head === ".") return toks[1] || "";
   if (INTERPRETERS.has(base)) {
     const rest = toks.slice(1);
+    let redir = false;
     for (const a of rest) {
+      if (redir) return a;                     // `interp < file`: stdin file IS the script
+      if (a === "<") { redir = true; continue; }
+      if (a.startsWith("<")) return a.slice(1); // `interp <file` glued
       if (INLINE_FLAG.test(a)) return "";      // inline code / module — no file
       if (a === "run" && base === "deno") continue; // `deno run script`
-      if (a.startsWith("-")) continue;         // other flags
+      if (a.startsWith("-")) continue;         // other flags (--version etc.)
       return a;                                // first bare arg = script
     }
     return "";

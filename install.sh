@@ -3,6 +3,10 @@
 ln -svf ~/.dotfiles/bash_profile ~/.bash_profile
 ln -svf ~/.dotfiles/bashrc ~/.bashrc
 cp ~/.dotfiles/gitconfig_base ~/.gitconfig
+# Global git hooks (git-hooks/): every hook name dispatches to hooks.d/<name>
+# then the repo's own .git/hooks/<name>. Currently strips Co-authored-by
+# trailers from all commit messages so no harness can add bot attribution.
+git config --global core.hooksPath ~/.dotfiles/git-hooks
 ln -svf ~/.dotfiles/vimrc ~/.vimrc
 command -v oh-my-posh || curl -s https://ohmyposh.dev/install.sh | bash -s
 ln -svf ~/.dotfiles/bashrc ~/.bashrc
@@ -71,7 +75,10 @@ ln -svf ~/.dotfiles/claude/statusline.sh  ~/.claude/statusline.sh
 ln -svf ~/.dotfiles/claude/claude-status  ~/.claude/bin/claude-status
 ln -svf ~/.dotfiles/claude/CLAUDE.md      ~/.claude/CLAUDE.md
 ln -svf ~/.dotfiles/claude/guard-hook.sh  ~/.claude/bin/claude-guard
-# Merge status-line config + guard hook into settings.json (idempotent; preserves
+# Merge status-line config + guard hook + no-attribution into settings.json
+# (attribution = official off-switch for Co-Authored-By / PR footer / session
+# URL; the git-hooks/ commit-msg hook is the backstop if this key is ever
+# deprecated). Idempotent; preserves
 # machine-specific settings and unrelated hooks — existing claude-guard entries are
 # replaced with the canonical pair rather than duplicated)
 if command -v jq >/dev/null; then
@@ -86,6 +93,7 @@ if command -v jq >/dev/null; then
     jq --arg guard '~/.claude/bin/claude-guard' --arg guard_abs "$HOME/.claude/bin/claude-guard" '
       def is_guard: ((.command // "") | (. == $guard or . == $guard_abs or endswith("/claude-guard")));
       .statusLine = {type:"command", command:"~/.claude/statusline.sh", padding:0, refreshInterval:10}
+      | .attribution = {commit:"", pr:"", sessionUrl:false}
       | .permissions = ((.permissions // {}) + {allow: (((.permissions.allow // []) + ["Bash(~/.claude/bin/claude-status:*)"]) | unique)})
       | .hooks = (.hooks // {})
       | .hooks.PreToolUse = (

@@ -1,0 +1,21 @@
+#!/bin/sh
+# Strip AI/bot attribution from every commit message, regardless of which
+# harness (Claude Code, Codex, opencode, pi, Copilot, ...) wrote it. Removes
+# (case-insensitive):
+#   - any `Co-authored-by:` trailer
+#   - any `Claude-Session:` trailer (leaks a session URL into public history)
+#   - any "Generated with [Claude Code](...)" / "🤖 Generated with ..." line
+# then trims trailing blank lines so the message doesn't end with whitespace.
+# Runs for commit, --amend, merge, cherry-pick and rebase reword; it cannot
+# touch commits made server-side (e.g. GitHub's squash-merge button).
+set -eu
+msg=$1
+tmp=$(mktemp "${TMPDIR:-/tmp}/commit-msg.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+
+# Drop the trailer lines, then strip trailing blank lines.
+sed -E -e '/^[[:space:]]*co-authored-by:/Id' \
+        -e '/^[[:space:]]*claude-session:/Id' \
+        -e '/^[[:space:]]*(🤖[[:space:]]*)?generated with .*claude/Id' "$msg" \
+    | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > "$tmp"
+cat "$tmp" > "$msg"

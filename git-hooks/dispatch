@@ -1,0 +1,30 @@
+#!/bin/sh
+# Global git hook dispatcher. Installed via `git config --global core.hooksPath
+# ~/.dotfiles/git-hooks`; every hook name in this dir is a symlink to this file.
+#
+# Setting core.hooksPath globally makes git IGNORE a repo's own .git/hooks, so
+# this script runs, in order:
+#   1. ~/.dotfiles/git-hooks/hooks.d/<hook-name>   (our global hook, if present)
+#   2. <repo>/.git/hooks/<hook-name>               (the repo's own hook, if executable)
+# and fails the operation if either fails. Repos that set core.hooksPath
+# locally (husky, lefthook, ...) override the global setting and bypass this
+# entirely — that's git's normal precedence.
+set -u
+name=$(basename "$0")
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+
+# 1. global hook
+if [ -x "$here/hooks.d/$name" ]; then
+    "$here/hooks.d/$name" "$@" || exit $?
+fi
+
+# 2. repo-local hook (skip if the repo's hooks dir IS this dir, to avoid recursion)
+# NB: `--git-path hooks` honours core.hooksPath (i.e. points back here), so
+# build the path from --git-common-dir (worktrees share the main repo's hooks).
+gitdir=$(git rev-parse --git-common-dir 2>/dev/null)
+local_hooks=${gitdir:+$gitdir/hooks}
+if [ -n "$local_hooks" ] && [ -x "$local_hooks/$name" ] \
+   && [ "$(readlink -f "$local_hooks")" != "$here" ]; then
+    "$local_hooks/$name" "$@" || exit $?
+fi
+exit 0

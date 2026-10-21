@@ -1,6 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
+# --claude-only: just the Claude Code baseline (status line, claude-status, global CLAUDE.md,
+# guard hook, settings.json incl. attribution off) plus the attribution-stripping git hooks.
+# For machines whose shell config isn't ours to replace, e.g. root on the Proxmox host.
+CLAUDE_ONLY=0
+case "${1:-}" in
+    --claude-only) CLAUDE_ONLY=1 ;;
+    "") ;;
+    *) echo "usage: $0 [--claude-only]" >&2; exit 2 ;;
+esac
+
 # Shell configuration and launchers use this stable path, even when the checkout
 # was cloned elsewhere (for example, ~/dotfiles).
 DOTFILES_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -18,12 +28,14 @@ fi
 mkdir -p "$HOME/.local/bin"
 export PATH="$HOME/.local/bin:$PATH"
 
-ln -svfn ~/.dotfiles/bash_profile ~/.bash_profile
-ln -svfn ~/.dotfiles/bashrc ~/.bashrc
 # Global git hooks (git-hooks/): every hook name dispatches to hooks.d/<name>
 # then the repo's own .git/hooks/<name>. Currently strips Co-authored-by
 # trailers from all commit messages so no harness can add bot attribution.
 git config --global core.hooksPath ~/.dotfiles/git-hooks
+
+if [ "$CLAUDE_ONLY" = 0 ]; then   # ---- shell, editor, prompt (skipped with --claude-only)
+ln -svfn ~/.dotfiles/bash_profile ~/.bash_profile
+ln -svfn ~/.dotfiles/bashrc ~/.bashrc
 ln -svfn ~/.dotfiles/vimrc ~/.vimrc
 if ! command -v oh-my-posh >/dev/null 2>&1; then
     # Minimal Ubuntu/Debian installs may lack unzip, which the upstream
@@ -46,6 +58,7 @@ if ! command -v oh-my-posh >/dev/null 2>&1; then
 fi
 
 mkdir -p ~/.vim/backups ~/.vim/swaps ~/.vim/undos
+fi   # ---- end shell, editor, prompt
 
 # jq — required by the Claude status line and the settings.json merge below.
 # Grab the standalone binary (no sudo); mirrors the sudo-less oh-my-posh install above.
@@ -66,9 +79,11 @@ if ! command -v jq >/dev/null; then
     fi
 fi
 
+if [ "$CLAUDE_ONLY" = 0 ]; then   # ---- launchers, pi, skills (skipped with --claude-only)
 [ -x ~/.opencode/bin/opencode ] && ln -svfn ~/.dotfiles/opencode.sh ~/.local/bin/opencode.sh
 command -v claude >/dev/null 2>&1 && ln -svfn ~/.dotfiles/claude-local.sh ~/.local/bin/claude-local.sh
-command -v claude >/dev/null 2>&1 && ln -svfn ~/.dotfiles/claude-trusted.sh ~/.local/bin/claude-trusted
+# claude-trusted was retired 2026-10: plain `claude` keeps the SSH agent socket now.
+rm -f ~/.local/bin/claude-trusted
 # docker read-only shim — only where the docker-ro wrapper is deployed (ansible
 # hardening role); elsewhere plain docker stays untouched.
 [ -x /usr/local/sbin/docker-ro ] && ln -svfn ~/.dotfiles/docker-shim.sh ~/.local/bin/docker
@@ -102,6 +117,8 @@ for skill in "$DOTFILES_DIR"/skills/*; do
     ln -svfn "$skill" "$HOME/.claude/skills/$skill_name"
     ln -svfn "$skill" "$HOME/.config/opencode/skills/$skill_name"
 done
+
+fi   # ---- end launchers, pi, skills
 
 # Claude Code status line + global working prefs + declare-status helper + guard hook
 mkdir -p ~/.claude/bin ~/.claude/status

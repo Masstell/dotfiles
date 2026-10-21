@@ -63,9 +63,14 @@ machine-specific settings and won't duplicate on re-run). Requires `jq` and `git
 
 PreToolUse hook registered by `install.sh` (symlinked to `~/.claude/bin/claude-guard`)
 for two matchers: `Bash` and `Write|Edit|MultiEdit|NotebookEdit`. It blocks (exit 2)
-destructive shell commands (`rm`, `mv`, `shred`, `rsync --delete`, `find -delete/-exec`,
-`dd of=`, `mkfs`, `truncate`, `chattr -i`, redirection) that reference a protected path
-or run with cwd inside one, and any file-tool write targeting a protected path.
+shell commands that delete, move away or overwrite (`rm`, `rmdir`, `unlink`, `shred`,
+`mv`, `truncate`, `tee`, `rsync --delete`, `find -delete/-exec`, `dd of=`, `mkfs`,
+`chattr -i`, redirection) when they reference a protected path or run with cwd inside
+one, any file-tool write targeting a protected path, and container-escalation shapes
+(`--privileged`, host namespaces, `--cap-add`, the docker socket, mounting `/`, `/etc`,
+`/root`, `/usr`, `/proc`, ...). Copying out of a protected path, project mounts under
+`/home` or `/var`, and SSH are allowed (2026-10 relaxation: the VMs hold no keys to
+each other and every PersonalKey signature is 1Password-approved).
 
 Protected paths: built-in `/mnt/raid` prefix, plus one path-prefix per line in
 `~/.claude/guard-paths.local` (machine-local, never committed — use it for paths that
@@ -75,3 +80,10 @@ Fail-closed: missing jq, malformed hook input, or internal errors block rather t
 allow. Written after the 2026-08-23 raid deletion incident. This is defense-in-depth
 only — it inspects command strings and cannot see inside scripts an agent writes then
 runs; the real boundary is filesystem ownership on the server.
+
+## Installing only the Claude bits
+
+`./install.sh --claude-only` installs the status line, `claude-status`, the global
+`CLAUDE.md`, the guard hook, the `settings.json` merge (status line, guard,
+attribution off) and the attribution-stripping git hooks, and leaves the shell, editor
+and prompt alone. Used for root on the Proxmox host.

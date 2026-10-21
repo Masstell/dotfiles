@@ -104,19 +104,19 @@ case "$tool" in
 
         # Destructive patterns. The verb boundary is "any non-word char or start",
         # so \rm, /bin/rm, `rm`, 'rm', $(rm ...) all match — an alias-escape or
-        # full path must not slip the check. Deliberately conservative: cp/tee/ln
-        # also count, so copying FROM the raid can false-positive; the block
-        # message tells the user to run such a command themselves.
+        # full path must not slip the check. Since 2026-10 only verbs that delete,
+        # move away or overwrite count (cp/ln/sed -i were dropped: they blocked
+        # copying FROM the archive, and tank has hourly + daily snapshots behind
+        # the occasional overwrite).
         B='(^|[^[:alnum:]_.-])'
         destructive=0
         if printf '%s' "$cmd" | grep -Eq \
-            -e "${B}(rm|shred|unlink|rmdir|mv|truncate|tee|cp|ln)([^[:alnum:]_.-]|\$)" \
+            -e "${B}(rm|shred|unlink|rmdir|mv|truncate|tee)([^[:alnum:]_.-]|\$)" \
             -e "${B}rsync[^;&|]*[[:space:]]--del" \
             -e "${B}find[[:space:]][^;&|]*[[:space:]]-(delete|exec(dir)?|ok(dir)?|fprint[f0]?|fls)([[:space:]]|\$)" \
             -e "${B}dd[[:space:]][^;&|]*of=" \
             -e "${B}mkfs[.[:alnum:]]*([[:space:]]|\$)" \
             -e "${B}chattr[[:space:]][^;&|]*-i" \
-            -e "${B}sed[[:space:]]([^;&|]*[[:space:]])?-i" \
             ; then
             destructive=1
         fi
@@ -127,22 +127,6 @@ case "$tool" in
                 deny "shell redirection into protected path ($p) in: $cmd"
             fi
         done
-
-        # Cross-box travel as the human (post-incident rule): an agent session
-        # is socketless — the launchers strip SSH_AUTH_SOCK — so ssh toward the
-        # LAN can only fail or password-prompt, and the design answer is the
-        # Exchange airlock. Block it with directions instead. claude-trusted
-        # sessions keep the socket and skip this rule: travel there is
-        # deliberate, human-launched, and 1Password-approved per signature.
-        if [ -z "${SSH_AUTH_SOCK:-}" ] \
-            && printf '%s' "$cmd" | grep -Eq "${B}(ssh|scp|sftp|rsync)([^[:alnum:]_.-]|\$)" \
-            && printf '%s' "$cmd" | grep -Eq \
-                -e '192\.168\.1\.' \
-                -e "${B}(matthswen|matt)@" \
-                -e "${B}(inference|mattserver|dnsmedia)([^[:alnum:]_.-]|\$)"; then
-            deny "cross-box remote access from an agent session: $cmd
-Agents never travel between boxes as the human. Move files through the Exchange airlock instead: /mnt/exchange on every Linux box (//192.168.1.3/Exchange; mapped drive on Windows). If a remote shell is genuinely needed, ask the human — they can run it themselves or launch claude-trusted."
-        fi
 
         # Docker escalation shapes (post-incident): docker-group membership is
         # root-equivalence, and even after the group removal these patterns
@@ -155,8 +139,8 @@ Agents never travel between boxes as the human. Move files through the Exchange 
                 -e '--cap-add' \
                 -e '--userns[= ]host' \
                 -e 'docker\.sock' \
-                -e '(-v|--volume)[= ]+["'"'"']?/(etc|root|var|usr|boot|bin|sbin|lib|home)?[/:,"'"'"']' \
-                -e '--mount[= ][^;&|]*source=/(etc|root|var|usr|boot|bin|sbin|lib|home)?([,/]|[[:space:]]|$)'; then
+                -e '(-v|--volume)[= ]+["'"'"']?/(etc|root|usr|boot|bin|sbin|lib|proc|sys|dev)?[/:,"'"'"']' \
+                -e '--mount[= ][^;&|]*source=/(etc|root|usr|boot|bin|sbin|lib|proc|sys|dev)?([,/]|[[:space:]]|$)'; then
             deny "container-escalation pattern in: $cmd
 Mounting host system paths, --privileged, host namespaces, or the docker socket is root-equivalence — no agent task needs it. If this is genuinely intended, the human runs it themselves."
         fi

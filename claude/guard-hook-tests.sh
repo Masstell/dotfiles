@@ -58,9 +58,9 @@ run "rsync --del abbrev" 2 "$(bash_json 'rsync -a --del src/ /mnt/raid/Media/' /
 run "find -execdir"      2 "$(bash_json 'find /mnt/raid -name t -execdir rm {} ;' /home/x)"
 run "find -okdir"        2 "$(bash_json 'find /mnt/raid -name t -okdir rm {} ;' /home/x)"
 run "tee into raid"      2 "$(bash_json 'echo x | tee /mnt/raid/f' /home/x)"
-run "cp onto raid"       2 "$(bash_json 'cp /tmp/x /mnt/raid/Media/x' /home/x)"
-run "sed -i raid"        2 "$(bash_json 'sed -i s/a/b/ /mnt/raid/f' /home/x)"
-run "ln -f raid"         2 "$(bash_json 'ln -sf /tmp/x /mnt/raid/f' /home/x)"
+run "cp from raid ok"    0 "$(bash_json 'cp /mnt/raid/archive/x.tsv /tmp/' /home/x)"
+run "sed -i raid ok"     0 "$(bash_json 'sed -i s/a/b/ /mnt/raid/f' /home/x)"
+run "ln raid ok"         0 "$(bash_json 'ln -s /mnt/raid/Media/a /tmp/a' /home/x)"
 run "clobber >| raid"    2 "$(bash_json 'echo x >| /mnt/raid/f' /home/x)"
 run "truncated glob"     2 "$(bash_json 'rm -rf /mnt/rai*/Media' /home/x)"
 run "short glob /mnt/*"  2 "$(bash_json 'rm -rf /mnt/*' /home/x)"
@@ -68,15 +68,9 @@ run "glob bracket"       2 "$(bash_json 'rm -rf /mnt/raid[0-9]' /home/x)"
 run "sed no -i allowed"  0 "$(bash_json 'sed s/a/b/ /mnt/raid/f' /home/x)"
 run "other glob allowed" 0 "$(bash_json 'rm -rf /media/usb/*' /home/x)"
 run "tmp glob allowed"   0 "$(bash_json 'rm -rf /tmp/build/*' /home/x)"
-# --- Agent-session LAN travel (socket-aware: blocked only when socketless) ---
-run "ssh lan ip"          2 "$(bash_json 'ssh 192.168.1.4 hostname' /home/x)" SSH_AUTH_SOCK=
-run "ssh as human"        2 "$(bash_json 'ssh matthswen@mattserver ls' /home/x)" SSH_AUTH_SOCK=
-run "ssh alias inference" 2 "$(bash_json 'ssh inference hostname' /home/x)" SSH_AUTH_SOCK=
-run "scp to lan"          2 "$(bash_json 'scp f matt@192.168.1.3:/tmp/' /home/x)" SSH_AUTH_SOCK=
-run "rsync to lan ip"     2 "$(bash_json 'rsync -a d/ 192.168.1.4:/tmp/d/' /home/x)" SSH_AUTH_SOCK=
-run "ssh trusted ok"      0 "$(bash_json 'ssh inference hostname' /home/x)" SSH_AUTH_SOCK=/tmp/fake-sock
-run "ssh github ok"       0 "$(bash_json 'ssh -T git@github.com' /home/x)" SSH_AUTH_SOCK=
-run "ssh-keygen ok"       0 "$(bash_json 'ssh-keygen -t ed25519 -f /tmp/k -N ""' /home/x)" SSH_AUTH_SOCK=
+# --- LAN ssh is no longer the hook's business (socket kept, 1Password approves) ---
+run "ssh lan socketless ok" 0 "$(bash_json 'ssh matt@192.168.1.19 uptime' /home/x)" SSH_AUTH_SOCK=
+run "ssh lan socket ok"     0 "$(bash_json 'ssh 192.168.1.4 hostname' /home/x)" SSH_AUTH_SOCK=/tmp/fake-sock
 # --- Docker escalation shapes => block (any session, socket irrelevant) ---
 run "docker -v root"      2 "$(bash_json 'docker run -v /:/host alpine sh' /home/x)"
 run "docker vol etc"      2 "$(bash_json 'docker run --volume /etc:/etc alpine' /home/x)"
@@ -91,6 +85,10 @@ run "docker logs ok"      0 "$(bash_json 'docker logs -f setmatch-api' /home/x)"
 run "docker build ok"     0 "$(bash_json 'docker build -t x .' /home/x)"
 run "compose config ok"   0 "$(bash_json 'docker compose -f deploy/docker-compose.yml config -q' /home/x)"
 run "proj volume ok"      0 "$(bash_json 'docker run -v /tmp/data:/data alpine' /home/x)"
+run "home checkout vol ok" 0 "$(bash_json 'docker compose run --rm -v /home/matt/vod-archive/archive:/app/archive:ro tools status' /home/x)"
+run "var data vol ok"     0 "$(bash_json 'docker run -v /var/lib/app/data:/data alpine' /home/x)"
+run "docker vol root dir" 2 "$(bash_json 'docker run -v /root:/r alpine' /home/x)"
+run "docker vol proc"     2 "$(bash_json 'docker run -v /proc:/p alpine' /home/x)"
 # --- Degraded / hostile input => fail closed ---
 run "malformed json"     2 'this is not json'
 run "no tool_name"       2 "$(jq -cn '{tool_input:{command:"ls"}}')"

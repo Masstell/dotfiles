@@ -106,9 +106,9 @@ if [[ -n "${MODEL_CTX:-}" ]]; then
     export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$MODEL_CTX"
 fi
 
-# Agent lockdown (post 2026-08-23 incident): local-model agents never hold the
-# human's SSH agent socket — no path to PersonalKey signatures exists in this
-# process. Supervised cross-box work uses `claude-trusted` instead.
+# Local-model sessions stay socketless: unlike plain `claude` (which keeps the
+# socket for git, 1Password-approved per signature), a local model never gets a
+# path to PersonalKey signatures. Use plain `claude` for work that needs them.
 unset SSH_AUTH_SOCK
 
 # Agent git identity: where the box has an agent-github key (registered on

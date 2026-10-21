@@ -68,7 +68,10 @@ shell commands that delete, move away or overwrite (`rm`, `rmdir`, `unlink`, `sh
 `chattr -i`, redirection) when they reference a protected path or run with cwd inside
 one, any file-tool write targeting a protected path, and container-escalation shapes
 (`--privileged`, host namespaces, `--cap-add`, the docker socket, mounting `/`, `/etc`,
-`/root`, `/usr`, `/proc`, ...). Copying out of a protected path, project mounts under
+`/root`, `/usr`, `/proc`, ...). Heredoc bodies that only go to a file (`cat > f <<EOF`, `tee f <<EOF`, not piped
+onward, not inside `$(...)`) are treated as text, so writing a script that mentions
+those commands isn't blocked; bodies fed to bash/python/ssh/etc. are still checked.
+Copying out of a protected path, project mounts under
 `/home` or `/var`, and SSH are allowed (2026-10 relaxation: the VMs hold no keys to
 each other and every PersonalKey signature is 1Password-approved).
 

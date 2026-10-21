@@ -88,6 +88,44 @@ under_protected() {
     return 1
 }
 
+# Heredoc bodies that can only land in a file are text, not commands: `cat > f <<'EOF'` or
+# `tee f <<EOF` writing a script or config that merely mentions rm and a protected path.
+# Only those bodies are dropped before matching. A body stays in (is checked) when it feeds
+# anything else (bash/sh/python/ssh ... <<EOF), when the line pipes onward (cat <<EOF | sh),
+# when the heredoc sits inside $(...) or backticks, or when a line has more than one heredoc.
+# The heredoc's own line is always kept, so `cat > /mnt/raid/f <<EOF` still trips the
+# redirection rule. Known gap, as before: a file written now and executed later.
+# Portable awk (mawk, gawk, BSD awk).
+strip_file_heredocs() {
+    printf '%s\n' "$1" | awk -v q="'" '
+    function first_word_of_last_cmd(s,   n, parts, c, w) {
+        n = split(s, parts, /\|\||&&|;|\||\(/)
+        c = parts[n]; sub(/^[[:space:]]+/, "", c); split(c, w, /[[:space:]]+/)
+        sub(/^.*\//, "", w[1]); return w[1]
+    }
+    body != "" {
+        t = $0; if (dash) sub(/^\t+/, "", t)
+        if (t == body) { body = ""; print }
+        next
+    }
+    {
+        print
+        line = $0
+        if (gsub(/<</, "<<", line) != 1) next
+        i = index($0, "<<"); pre = substr($0, 1, i - 1); post = substr($0, i + 2)
+        if (post ~ /^</) next
+        if (pre ~ /\$\(/ || index(pre, "`")) next
+        dash = (post ~ /^-/); if (dash) post = substr(post, 2)
+        re = "^[[:space:]]*[\"" q "]?[A-Za-z_][A-Za-z0-9_]*[\"" q "]?"
+        if (!match(post, re)) next
+        tok = substr(post, RSTART, RLENGTH); rest = substr(post, RSTART + RLENGTH)
+        gsub("[[:space:]\"" q "]", "", tok)
+        if (index(rest, "|")) next
+        c = first_word_of_last_cmd(pre)
+        if (c == "cat" || c == "tee") body = tok
+    }'
+}
+
 case "$tool" in
     Write|Edit|MultiEdit|NotebookEdit)
         target="$(j '.tool_input.file_path // .tool_input.notebook_path // empty')"
@@ -101,6 +139,8 @@ case "$tool" in
         cmd="$(j '.tool_input.command // empty')"
         cwd="$(j '.cwd // empty')"
         [ -z "$cmd" ] && exit 0
+        # What gets matched: the command minus heredoc bodies that are only written to a file.
+        scan="$(strip_file_heredocs "$cmd")" || deny "could not pre-process the command"
 
         # Destructive patterns. The verb boundary is "any non-word char or start",
         # so \rm, /bin/rm, `rm`, 'rm', $(rm ...) all match — an alias-escape or
@@ -110,7 +150,7 @@ case "$tool" in
         # the occasional overwrite).
         B='(^|[^[:alnum:]_.-])'
         destructive=0
-        if printf '%s' "$cmd" | grep -Eq \
+        if printf '%s' "$scan" | grep -Eq \
             -e "${B}(rm|shred|unlink|rmdir|mv|truncate|tee)([^[:alnum:]_.-]|\$)" \
             -e "${B}rsync[^;&|]*[[:space:]]--del" \
             -e "${B}find[[:space:]][^;&|]*[[:space:]]-(delete|exec(dir)?|ok(dir)?|fprint[f0]?|fls)([[:space:]]|\$)" \
@@ -123,7 +163,7 @@ case "$tool" in
         # Redirection truncating/appending into a protected path — including the
         # noclobber-override >| form. Paths are ERE-escaped before splicing.
         for p in "${protected[@]}"; do
-            if printf '%s' "$cmd" | grep -Eq ">>?\|?[[:space:]]*['\"]?$(esc_ere "$p")"; then
+            if printf '%s' "$scan" | grep -Eq ">>?\|?[[:space:]]*['\"]?$(esc_ere "$p")"; then
                 deny "shell redirection into protected path ($p) in: $cmd"
             fi
         done
@@ -132,8 +172,8 @@ case "$tool" in
         # root-equivalence, and even after the group removal these patterns
         # have no legitimate agent use. Blocked in every guarded session —
         # a human who genuinely needs one runs it in their own shell.
-        if printf '%s' "$cmd" | grep -Eq "${B}(docker|podman|nerdctl)([^[:alnum:]_.-]|\$)" \
-            && printf '%s' "$cmd" | grep -Eq \
+        if printf '%s' "$scan" | grep -Eq "${B}(docker|podman|nerdctl)([^[:alnum:]_.-]|\$)" \
+            && printf '%s' "$scan" | grep -Eq \
                 -e '--privileged' \
                 -e '--pid[= ]host' \
                 -e '--cap-add' \
@@ -146,10 +186,10 @@ Mounting host system paths, --privileged, host namespaces, or the docker socket 
         fi
 
         if [ "$destructive" = 1 ]; then
-            if mentions_protected "$cmd"; then
+            if mentions_protected "$scan"; then
                 deny "destructive command referencing a protected path: $cmd"
             fi
-            if glob_targets_protected "$cmd"; then
+            if glob_targets_protected "$scan"; then
                 deny "destructive command with a glob that can expand into a protected path: $cmd"
             fi
             if [ -n "$cwd" ] && under_protected "$cwd"; then

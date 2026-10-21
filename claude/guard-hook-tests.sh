@@ -89,6 +89,20 @@ run "home checkout vol ok" 0 "$(bash_json 'docker compose run --rm -v /home/matt
 run "var data vol ok"     0 "$(bash_json 'docker run -v /var/lib/app/data:/data alpine' /home/x)"
 run "docker vol root dir" 2 "$(bash_json 'docker run -v /root:/r alpine' /home/x)"
 run "docker vol proc"     2 "$(bash_json 'docker run -v /proc:/p alpine' /home/x)"
+# --- Heredocs: bodies only written to a file are text; bodies that execute stay checked ---
+run "cat > file heredoc ok"  0 "$(bash_json $'cat > /tmp/s.sh <<\'EOF\'\nrm -rf /mnt/raid/x\nEOF' /home/x)"
+run "cat >> file heredoc ok" 0 "$(bash_json $'cd /tmp && cat >> notes.md <<EOF\nnever rm /mnt/raid\nEOF' /home/x)"
+run "tee file heredoc ok"    0 "$(bash_json $'tee /tmp/a.txt <<"EOF" >/dev/null\necho x > /mnt/raid/f\nEOF' /home/x)"
+run "<<- tab terminator ok"  0 "$(bash_json $'cat > /tmp/b <<-EOF\n\trm /mnt/raid/y\n\tEOF' /home/x)"
+run "cmd after heredoc"      2 "$(bash_json $'cat > /tmp/c <<EOF\ntext\nEOF\nrm -rf /mnt/raid/x' /home/x)"
+run "bash heredoc"           2 "$(bash_json $'bash <<\'EOF\'\nrm -rf /mnt/raid/x\nEOF' /home/x)"
+run "python heredoc"         2 "$(bash_json $'python3 - <<\'PY\'\nimport os; os.system("rm -rf /mnt/raid/x")\nPY' /home/x)"
+run "ssh heredoc"            2 "$(bash_json $'ssh host bash -s <<EOF\nrm -rf /mnt/raid/x\nEOF' /home/x)"
+run "cat heredoc | sh"       2 "$(bash_json $'cat <<EOF | sh\nrm -rf /mnt/raid/x\nEOF' /home/x)"
+run "\$(cat heredoc)"        2 "$(bash_json $'bash -c "$(cat <<EOF\nrm -rf /mnt/raid/x\nEOF\n)"' /home/x)"
+run "cat heredoc to raid"    2 "$(bash_json $'cat > /mnt/raid/f <<EOF\nhello\nEOF' /home/x)"
+run "two heredocs one line"  2 "$(bash_json $'cat <<A > /tmp/a; bash <<B\nx\nA\nrm -rf /mnt/raid/x\nB' /home/x)"
+run "sudo tee kept"          2 "$(bash_json $'sudo tee /tmp/t <<EOF\nrm -rf /mnt/raid/x\nEOF' /home/x)"
 # --- Degraded / hostile input => fail closed ---
 run "malformed json"     2 'this is not json'
 run "no tool_name"       2 "$(jq -cn '{tool_input:{command:"ls"}}')"

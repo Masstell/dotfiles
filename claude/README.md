@@ -50,7 +50,8 @@ Usage/ctx numbers are colored bright green → yellow → red by severity (≥50
 - `claude-status` — helper the LLM calls to declare its focus + PR:
   `claude-status "<=5 words>" "#35"`. Writes `~/.claude/status/$CLAUDE_CODE_SESSION_ID.json`,
   so concurrent sessions in the same repo don't overwrite each other's summary.
-  Files untouched for 7 days are pruned on each write.
+  Files untouched for 7 days are pruned on each write. Inside tmux it also renames
+  the agent's own window (`$TMUX_PANE`) to the summary, with `#` escaped.
 - `CLAUDE.md` — global instruction telling the LLM to declare its summary + PR.
 
 ## Install

@@ -17,6 +17,10 @@ At the **start of each task**, and again **whenever your focus changes**, run:
   (`"issue-123"`) if you're working an issue with no PR yet.
 - Re-run it freely to keep it current; it's cheap and local.
 
+When you're running inside tmux, it also renames your tmux window to the summary,
+so the status bar shows what each window is doing; don't rename windows or sessions
+any other way.
+
 This feeds the status bar only — it is not shown to the user in chat, so there's no
 need to announce that you ran it.
 

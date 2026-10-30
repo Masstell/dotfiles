@@ -26,11 +26,13 @@ jq -n \
   '{summary:$s, pr:$p, branch:$b, dir:$d, ts:$t}' \
   > "$HOME/.claude/status/$sid.json"
 
-# Inside tmux, name the session after the summary too, so `tmux ls` says what each
-# agent is doing instead of a number. tmux rejects ':' and '.' in session names, and
-# an already-taken name fails; either way the status file above is what matters.
-if [ -n "$TMUX" ] && [ -n "$summary" ] && command -v tmux >/dev/null; then
-    tmux rename-session -t "${TMUX_PANE:-}" "${summary//[:.]/-}" 2>/dev/null || true
+# Inside tmux, name this agent's window after the summary too, so the status bar
+# and `prefix w` say what each window is doing instead of "claude". Target our own
+# pane only; without TMUX_PANE tmux would pick whatever window is current. tmux
+# expands '#' sequences in names ('#(cmd)' even runs a command), so double them.
+name="$(printf '%s' "$summary" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
+if [ -n "$TMUX" ] && [ -n "${TMUX_PANE:-}" ] && [ -n "$name" ] && command -v tmux >/dev/null; then
+    tmux rename-window -t "$TMUX_PANE" -- "${name//#/##}" 2>/dev/null || true
 fi
 
 # Sessions are ephemeral, so their files are too — drop anything untouched for a week.

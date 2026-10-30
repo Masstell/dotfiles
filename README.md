@@ -5,7 +5,7 @@ On Linux or macOS, run `./install.sh` from this checkout. It creates
 works too. If `~/.dotfiles` already refers to another checkout, resolve that
 conflict first; the installer will stop without replacing it.
 
-The installer replaces managed shell/Vim configuration files with symlinks,
+The installer replaces managed shell/Vim/tmux configuration files with symlinks,
 sets the global Git hooks path, and merges the Claude configuration. Back up
 existing configuration files before installing. Your other Git settings are
 preserved.

@@ -37,6 +37,7 @@ if [ "$CLAUDE_ONLY" = 0 ]; then   # ---- shell, editor, prompt (skipped with --c
 ln -svfn ~/.dotfiles/bash_profile ~/.bash_profile
 ln -svfn ~/.dotfiles/bashrc ~/.bashrc
 ln -svfn ~/.dotfiles/vimrc ~/.vimrc
+ln -svfn ~/.dotfiles/tmux.conf ~/.tmux.conf
 if ! command -v oh-my-posh >/dev/null 2>&1; then
     # Minimal Ubuntu/Debian installs may lack unzip, which the upstream
     # installer needs to extract themes.

@@ -118,13 +118,16 @@ if [ -n "$PI_VERSION" ] && command -v npm >/dev/null 2>&1; then
         # Defaults: the arbiter's default model, and an HTTP idle timeout past
         # the arbiter's 600 s wait budget (pi's default of 300 s abandons
         # requests the arbiter would have served). Other settings are kept.
+        # lastChangelogVersion: the sandbox discards pi's own settings writes,
+        # so without this pi would show the changelog on every launch.
         if command -v jq >/dev/null; then
             PI_SETTINGS=~/.pi/agent/settings.json
             [ -s "$PI_SETTINGS" ] || echo '{}' > "$PI_SETTINGS"
             tmp=$(mktemp "$PI_SETTINGS.tmp.XXXXXX")
-            jq '.defaultProvider = (.defaultProvider // "arbiter")
+            jq --arg v "$PI_VERSION" '.defaultProvider = (.defaultProvider // "arbiter")
                 | .defaultModel = (.defaultModel // "default")
-                | .httpIdleTimeoutMs = ([(.httpIdleTimeoutMs // 0), 900000] | max)' \
+                | .httpIdleTimeoutMs = ([(.httpIdleTimeoutMs // 0), 900000] | max)
+                | .lastChangelogVersion = $v' \
                 "$PI_SETTINGS" > "$tmp" && mv "$tmp" "$PI_SETTINGS" || rm -f "$tmp"
         fi
     fi

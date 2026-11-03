@@ -84,10 +84,15 @@ fi
 
 # --- Project -------------------------------------------------------------------
 PROJECT="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || pwd -P)"
-# Your call, but say what it costs: the project is writable, so a project that
-# contains home makes all of home writable (hidden secrets stay hidden).
+# Starting in $HOME (or above it) is allowed, but nothing is made writable:
+# a writable home would let the agent edit ~/.bashrc, ~/.profile or user
+# systemd units, which run OUTSIDE the sandbox at your next login. Read-only
+# session; mkdir a project and start pi there to edit.
+RW_PROJECT=1
 if [[ "$HOME/" == "$PROJECT/"* ]]; then
-    echo "pi: ⚠️  project is ${PROJECT}, which contains your home directory — all of it is writable this session." >&2
+    RW_PROJECT=0
+    echo "pi: started in ${PROJECT} — read-only session (nothing in home is writable)." >&2
+    echo "    To start a new project: mkdir ~/<name> && cd ~/<name> && pi" >&2
 fi
 
 args=(
@@ -110,7 +115,7 @@ fi
 # so a project that contains home still can't uncover ~/.ssh or pi's config.
 
 # The project, plus any explicitly requested extra paths.
-args+=(--bind "$PROJECT" "$PROJECT")
+[[ "$RW_PROJECT" == 1 ]] && args+=(--bind "$PROJECT" "$PROJECT")
 IFS=: read -r -a _extra <<<"${PI_RW:-}"
 for p in "${_extra[@]}"; do
     [[ -n "$p" ]] || continue
@@ -176,7 +181,7 @@ done
 args+=(
     --setenv PI_SANDBOX 1
     --setenv PI_CODE_DIR "$PI_CODE_DIR"
-    --setenv PI_PROJECT_DIR "$PROJECT"
+    --setenv PI_PROJECT_DIR "$([[ "$RW_PROJECT" == 1 ]] && echo "$PROJECT" || echo "none — read-only session")"
     --setenv PI_SECRETS_FD 3
     --setenv PI_SKIP_VERSION_CHECK 1
     --setenv PI_TELEMETRY 0

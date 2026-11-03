@@ -89,11 +89,12 @@ could switch the classifier off. So in-session writes go to a tmpfs that is
 discarded. The cost: `/settings`, `/trust` and `/login` changes made inside
 pi don't persist; make those with `PI_NOSANDBOX=1 pi` or edit the files.
 
-Starting pi in `$HOME` (or anything containing it) works, with a warning: the
-project is writable, so all of home is. Secrets, pi's own config and git hooks
-stay hidden or read-only either way — they are mounted on top of the project.
-Run inside `~/dotfiles` and the agent can edit its own classifier source (it
-takes effect on the next launch, and shows in `git diff`).
+Starting pi in `$HOME` (or above it) gives a read-only session: you can look
+around and ask questions, but nothing in home is writable — a writable home
+would let the agent edit `~/.bashrc`, `~/.profile` or user systemd units, which
+run outside the sandbox at your next login. To start a new project, `mkdir`
+it and run `pi` inside. Run inside `~/dotfiles` and the agent can edit its own
+classifier source (it takes effect on the next launch, and shows in `git diff`).
 
 **Docker is the hole, on purpose.** The VMs run their services in root
 Docker and the agent needs real docker access, so the socket stays reachable

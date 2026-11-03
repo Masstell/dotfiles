@@ -84,14 +84,10 @@ fi
 
 # --- Project -------------------------------------------------------------------
 PROJECT="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || pwd -P)"
-case "$PROJECT" in
-    / | "$HOME" | /home | /root)
-        echo "pi: refusing to make ${PROJECT} writable — cd into a project first." >&2
-        exit 1 ;;
-esac
+# Your call, but say what it costs: the project is writable, so a project that
+# contains home makes all of home writable (hidden secrets stay hidden).
 if [[ "$HOME/" == "$PROJECT/"* ]]; then
-    echo "pi: ${PROJECT} contains your home directory — cd into a project first." >&2
-    exit 1
+    echo "pi: ⚠️  project is ${PROJECT}, which contains your home directory — all of it is writable this session." >&2
 fi
 
 args=(
@@ -108,6 +104,26 @@ args=(
 if [[ "$(sysctl -n dev.tty.legacy_tiocsti 2>/dev/null || echo 1)" != 0 ]]; then
     args+=(--new-session)
 fi
+
+# Mount order matters — later mounts land on top. Writable things first (the
+# project, extra paths, caches), then the hiding and the read-only carve-outs,
+# so a project that contains home still can't uncover ~/.ssh or pi's config.
+
+# The project, plus any explicitly requested extra paths.
+args+=(--bind "$PROJECT" "$PROJECT")
+IFS=: read -r -a _extra <<<"${PI_RW:-}"
+for p in "${_extra[@]}"; do
+    [[ -n "$p" ]] || continue
+    p="$(readlink -f "$p")"
+    [[ -e "$p" ]] || { echo "pi: PI_RW path does not exist: $p" >&2; exit 1; }
+    echo "pi: extra writable path: $p" >&2
+    args+=(--bind "$p" "$p")
+done
+
+# Tool caches stay writable so installs and builds work.
+for d in .cache .npm .cargo .rustup .local/share/uv .local/share/pnpm go/pkg; do
+    [[ -d "${HOME}/${d}" ]] && args+=(--bind "${HOME}/${d}" "${HOME}/${d}")
+done
 
 hide_dir()  { [[ -d "$1" && ! -L "$1" ]] && args+=(--tmpfs "$1"); return 0; }
 hide_file() { [[ -f "$1" ]] && args+=(--ro-bind /dev/null "$1"); return 0; }
@@ -140,28 +156,13 @@ args+=(
     --bind "${AGENT_DIR}/sessions" "${AGENT_DIR}/sessions"
 )
 
-# Tool caches stay writable so installs and builds work.
-for d in .cache .npm .cargo .rustup .local/share/uv .local/share/pnpm go/pkg; do
-    [[ -d "${HOME}/${d}" ]] && args+=(--bind "${HOME}/${d}" "${HOME}/${d}")
-done
-
-# The project, last, so it wins over anything above it — except the parts of
-# git that run code later, outside the sandbox, when the human next uses the
-# repo: hooks, and config (core.hooksPath, core.fsmonitor, aliases).
-args+=(--bind "$PROJECT" "$PROJECT")
+# Git parts that run code later, outside the sandbox, when the human next
+# uses the repo: hooks, and config (core.hooksPath, core.fsmonitor, aliases).
 if [[ -d "$PROJECT/.git" ]]; then
     mkdir -p "$PROJECT/.git/hooks"
     args+=(--ro-bind "$PROJECT/.git/hooks" "$PROJECT/.git/hooks")
     [[ -f "$PROJECT/.git/config" ]] && args+=(--ro-bind "$PROJECT/.git/config" "$PROJECT/.git/config")
 fi
-IFS=: read -r -a _extra <<<"${PI_RW:-}"
-for p in "${_extra[@]}"; do
-    [[ -n "$p" ]] || continue
-    p="$(readlink -f "$p")"
-    [[ -e "$p" ]] || { echo "pi: PI_RW path does not exist: $p" >&2; exit 1; }
-    echo "pi: extra writable path: $p" >&2
-    args+=(--bind "$p" "$p")
-done
 
 # --- Environment: rebuilt from an allowlist -------------------------------------
 args+=(--clearenv)

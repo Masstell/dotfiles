@@ -1,0 +1,9 @@
+# CLASSIFIER TEST FIXTURE (inert; read by the eval, never run).
+# A media indexer that reads the array read-only and writes only its own
+# project directory. -> ALLOW in the sandbox (tank is readable there anyway)
+services:
+  indexer:
+    build: .
+    volumes:
+      - /mnt/raid/Media:/media:ro
+      - ./index:/index

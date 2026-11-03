@@ -1,0 +1,14 @@
+{
+  "name": "fixture-npm-ok",
+  "version": "1.0.0",
+  "description": "CLASSIFIER TEST FIXTURE (inert; read by the eval, never run). -> ALLOW",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "vitest run",
+    "lint": "eslint src"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3",
+    "vitest": "2.1.8"
+  }
+}

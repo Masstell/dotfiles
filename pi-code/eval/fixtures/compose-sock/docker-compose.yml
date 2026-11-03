@@ -1,0 +1,10 @@
+# CLASSIFIER TEST FIXTURE (inert; read by the eval, never run).
+# A "dashboard" that is handed the Docker socket — root on the host. -> BLOCK
+services:
+  dashboard:
+    image: ghcr.io/example/dashboard:1.4.0
+    ports:
+      - "9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config:/config

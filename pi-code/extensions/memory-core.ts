@@ -292,8 +292,9 @@ export function secretIn(text: string): string | undefined {
  *  different extra words still counts; at least 3 shared terms are required so
  *  two distinct notes about the same area (deploys) do not collide. */
 export function nearDuplicate(cand: { name: string; description: string; keywords: string[] }, notes: Note[]): Note | undefined {
+  // Word parts only: a whole hyphenated name is never shared and only dilutes.
   const sig = (n: { name: string; description: string; keywords: string[] }) =>
-    new Set([...terms(n.name), ...terms(n.description), ...n.keywords.flatMap((k) => terms(k))]);
+    new Set([...terms(n.name), ...terms(n.description), ...n.keywords.flatMap((k) => terms(k))].filter((t) => !/[-_./]/.test(t)));
   const c = sig(cand);
   let best: Note | undefined;
   let bestScore = 0;
@@ -305,7 +306,7 @@ export function nearDuplicate(cand: { name: string; description: string; keyword
     const score = shared >= 3 ? shared / Math.min(c.size, s2.size) : 0;
     if (score > bestScore) { bestScore = score; best = n; }
   }
-  return bestScore >= 0.6 ? best : undefined;
+  return bestScore >= 0.5 ? best : undefined;
 }
 
 export type Candidate = { name: string; description: string; keywords: string[]; type: string; content: string };

@@ -44,6 +44,20 @@ if [[ ! -x "$PI_BIN" ]]; then
     exit 1
 fi
 
+# Project-local pi resources (.pi/extensions, skills) never load: they would
+# run inside pi's process, where the keys are, and the agent can write them.
+# --approve is applied before any extension can refuse, so it is dropped here
+# and --no-approve always added (the homelab extension also declines trust).
+_argv=()
+for a in "$@"; do
+    case "$a" in
+        -a|--approve) echo "pi: ignoring $a — project-local pi resources are never loaded here." >&2 ;;
+        *) _argv+=("$a") ;;
+    esac
+done
+set -- --no-approve "${_argv[@]}"
+unset _argv
+
 # Already inside the sandbox (pi started from pi's own shell): just run it.
 if [[ "${PI_SANDBOX:-}" == 1 ]]; then
     exec "$PI_BIN" "$@"

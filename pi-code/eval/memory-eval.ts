@@ -106,6 +106,7 @@ const rejects: [string, any, RegExp][] = [
   ["password in prose", { ...base, content: "the db password is hunter2hunter2" }, /password/],
   ["aws secret with slashes", { ...base, content: "aws_secret_access_key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" }, /token/],
   ["opaque base64 token", { ...base, content: "the bearer is Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3A" }, /token/],
+  ["hex after 'is'", { ...base, content: "the api key is 3f786850e387550fdab836ed7e6dc881de23001b" }, /hex secret/],
   ["lowercase random token", { ...base, content: "use k4j9x2m7q1w8e5r3t6y0u2i9o7p4a1s8d" }, /token/],
   ["hex key next to a secret word", { ...base, content: "api key: 3f786850e387550fdab836ed7e6dc881" }, /secret|credential/],
   ["near-duplicate of deploy note", { ...base, name: "staging-wireguard", description: "Deploys to staging fail unless the WireGuard tunnel is up", keywords: ["deploy", "staging", "wireguard", "vpn"] }, /deploy-needs-vpn/],

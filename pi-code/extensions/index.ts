@@ -16,10 +16,18 @@ import registerMemory from "./memory.ts";
 import { readSecrets } from "./secrets.ts";
 
 export default async function (pi: any) {
+  // pi.sh starts pi with NODE_OPTIONS=--disable-sigusr1 (no inspector on
+  // SIGUSR1). Only pi's own process needs it; an older Node the agent runs
+  // (nvm, volta, a tool's bundled Node) would refuse the flag and not start.
+  if (process.env.NODE_OPTIONS === "--disable-sigusr1") delete process.env.NODE_OPTIONS;
   const secrets = readSecrets();
   // The gate first, and outside any try: if anything below fails, bash must
   // still be classified, not run unchecked.
   registerClassifier(pi, secrets);
+  // A project's own .pi/extensions and skills would run inside pi's process,
+  // where the keys are, and the agent can write them. Decline every project,
+  // whatever trust.json or defaultProjectTrust say (a user extension's answer wins).
+  pi.on("project_trust", async () => ({ trusted: "no" }));
   for (const [name, register] of [
     ["arbiter provider", registerArbiter],
     ["advisor", registerAdvisor],

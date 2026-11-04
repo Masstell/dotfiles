@@ -376,8 +376,9 @@ const SECRET_PATTERNS: [RegExp, string][] = [
   [/\bxox[abposr]-[A-Za-z0-9-]{10,}/, "a Slack token"],
   [/\bAKIA[0-9A-Z]{16}\b/, "an AWS access key"],
   [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, "a JWT"],
-  // Hex only counts directly after a secret word: bare hex is usually a commit or digest.
-  [/\b(key|secret|token|password|passwd|bearer)\b\s*[:=]?\s*["']?[A-Fa-f0-9]{32,}\b/i, "a hex secret"],
+  // Hex only counts right after a secret word ("api key: <hex>", "the token is
+  // <hex>"): bare hex is usually a commit or digest.
+  [/\b(key|secret|token|password|passwd|bearer)\b(?:\s+is)?\s*[:=]?\s*["']?[A-Fa-f0-9]{32,}\b/i, "a hex secret"],
   [/\bpassword\s+(?:is|was)\s+(?!(?:stored|kept|saved|managed|in|at|from|the|a|an|set|rotated|changed)\b)\S{6,}/i, "a password"],
 ];
 

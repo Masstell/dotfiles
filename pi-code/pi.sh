@@ -83,6 +83,8 @@ fi
 # It lives in ~/.config/pi-agent, which the sandbox hides, and reaches pi on
 # fd 3 with the other keys, so nothing pi runs can read it or forge a note.
 MEMORY_KEY_FILE="${HOME}/.config/pi-agent/memory.key"
+# An empty key file (an interrupted first write) is replaced, not kept forever.
+[[ -f "$MEMORY_KEY_FILE" && ! -s "$MEMORY_KEY_FILE" ]] && rm -f "$MEMORY_KEY_FILE"
 if [[ ! -s "$MEMORY_KEY_FILE" ]]; then
     [[ -d "${MEMORY_KEY_FILE%/*}" ]] || mkdir -m 700 -p "${MEMORY_KEY_FILE%/*}"
     # noclobber: two first launches at once must not each write a key.

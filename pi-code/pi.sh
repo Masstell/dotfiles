@@ -55,7 +55,12 @@ for a in "$@"; do
         *) _argv+=("$a") ;;
     esac
 done
-set -- --no-approve "${_argv[@]}"
+# pi recognizes subcommands only as the first argument, so those are left as
+# they are (they don't start an agent session).
+case "${_argv[0]:-}" in
+    install|remove|uninstall|update|list|config|mcp|auth) set -- "${_argv[@]}" ;;
+    *) set -- --no-approve "${_argv[@]}" ;;
+esac
 unset _argv
 
 # Already inside the sandbox (pi started from pi's own shell): just run it.

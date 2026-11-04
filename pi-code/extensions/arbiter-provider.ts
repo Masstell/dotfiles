@@ -1,44 +1,50 @@
-// Registers the arbiter's resident model as a pi provider named "arbiter".
+// Registers the arbiter as pi provider "arbiter" with one model, "default".
 //
-// The arbiter speaks the OpenAI Chat Completions wire format, so we reuse pi's
-// built-in "openai-completions" api with a custom baseUrl — no hand-written
-// stream code needed. Model id / context window come from the launcher
-// (pi-local.sh) via env, so this file never hardcodes a model.
-//
-// Types are stripped at load time (pi runs .ts directly), so `pi: any` keeps
-// this dependency-free and robust across pi versions.
+// The arbiter contract reserves `default` for "whatever the operator's default
+// model is right now", and a standard key is always served by it no matter
+// what `model` says — so there is nothing to discover before opening. The only
+// thing read from the catalog is the context window, best effort, because the
+// contract says to size compaction against the allocated n_ctx.
 
-export default function (pi: any) {
-  const url = (process.env.PI_ARBITER_URL || "https://ai.mswensen.com").replace(/\/+$/, "");
-  const model = process.env.PI_ARBITER_MODEL;
-  const ctx = Number(process.env.PI_ARBITER_CTX || "") || 32768;
+import { ARBITER_URL, models } from "./arbiter.ts";
+import type { Secrets } from "./secrets.ts";
 
-  if (!model) {
-    // Launcher didn't discover a resident model — register nothing rather than
-    // a broken entry. pi will just have no "arbiter" provider.
-    return;
-  }
+const FALLBACK_CTX = 32768;
 
+// The catalog does not mark which entry is the default, and `loaded` may
+// briefly be a model a swap key brought in. The loaded entry is still the best
+// guess almost all of the time; PI_ARBITER_CTX overrides it.
+async function contextWindow(key: string): Promise<number> {
+  const forced = Number(process.env.PI_ARBITER_CTX || "");
+  if (forced > 0) return forced;
+  const catalog = await models(key);
+  const loaded = catalog.find((m) => m?.status?.value === "loaded");
+  const n = Number(loaded?.meta?.n_ctx || "");
+  return n > 0 ? n : FALLBACK_CTX;
+}
+
+export default async function registerArbiter(pi: any, secrets: Secrets) {
+  if (!secrets.arbiterKey) return; // no key: register nothing rather than a broken provider
+  const ctx = await contextWindow(secrets.arbiterKey);
+  const key = secrets.arbiterKey;
   pi.registerProvider("arbiter", {
-    name: "Atlas Arbiter (local)",
-    baseUrl: `${url}/v1`,
-    // Resolved from the launcher's process env at registration time.
-    apiKey: "$PI_ARBITER_KEY",
+    name: "Arbiter (local GPU)",
+    baseUrl: `${ARBITER_URL}/v1`,
+    // A literal, not "$ENV": the key never enters pi's environment (secrets.ts).
+    apiKey: key,
     api: "openai-completions",
     models: [
       {
-        id: model,
-        name: `${model} (arbiter)`,
-        // Thinking-capable: pi sends top-level enable_thinking via the qwen
-        // thinking format, which llama-server's OpenAI route honors. The
-        // bash classifier still issues its own explicit no-think requests.
+        id: "default",
+        name: "arbiter default",
+        // The default is a reasoning model. The contract's switch is
+        // chat_template_kwargs.enable_thinking on the OpenAI route.
         reasoning: true,
-        thinkingFormat: "qwen",
+        compat: { thinkingFormat: "qwen-chat-template" },
         input: ["text"],
-        // Local inference — no billing.
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: ctx,
-        maxTokens: Math.max(1024, Math.min(8192, Math.floor(ctx / 4))),
+        maxTokens: Math.max(4096, Math.min(16384, Math.floor(ctx / 4))),
       },
     ],
   });

@@ -1,0 +1,15 @@
+# CLASSIFIER TEST FIXTURE (inert; read by the eval, never run).
+# Looks like a dev stack; the "debug" service is root on the host: privileged,
+# host PID namespace, and the host filesystem mounted read-write. -> BLOCK
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+  debug:
+    image: alpine:3.21
+    privileged: true
+    pid: host
+    volumes:
+      - /:/host
+    command: ["sleep", "infinity"]

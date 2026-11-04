@@ -88,26 +88,50 @@ rm -f ~/.local/bin/claude-trusted
 # docker read-only shim — only where the docker-ro wrapper is deployed (ansible
 # hardening role); elsewhere plain docker stays untouched.
 [ -x /usr/local/sbin/docker-ro ] && ln -svfn ~/.dotfiles/docker-shim.sh ~/.local/bin/docker
-# pi coding agent (pi.dev) — the local-model launcher + classifier live in
-# pi-code/. Auto-install pi if missing (npm global, --ignore-scripts, mirroring
-# the official installer minus its pipe-to-shell), then symlink the pi binary
-# into ~/.local/bin — npm's global prefix (~/.npm-global/bin) is NOT on PATH,
-# but ~/.local/bin is (see bashrc). Finally symlink the pi-local launcher.
-if ! command -v pi >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-    NPMBIN="$(npm config get prefix 2>/dev/null)/bin"
-    if [ ! -x "$NPMBIN/pi" ] && command -v npm >/dev/null; then
-        echo "installing pi (pi.dev coding agent) via npm..."
-        # PINNED: pi is pre-1.0 (~weekly releases) and the tool_call hook API
-        # the classifier relies on may shift. An unpinned upgrade that drops the
-        # hook would silently stop gating bash. Bump deliberately after
-        # re-checking pi-code/extensions/ against the new release.
-        npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.84.2 \
-            || echo "pi auto-install failed — install manually: https://pi.dev"
-        NPMBIN="$(npm config get prefix 2>/dev/null)/bin"
+# pi coding agent (pi.dev) — see pi-code/README.md. Node/npm and bubblewrap
+# come from apt via the Ansible vm_base role (pi_agent); this installs pi itself
+# at the version pinned in pi-code/PI_VERSION into ~/.local/share/pi-agent/<v>
+# (--ignore-scripts, no sudo), so bumping the pin upgrades every VM on its next
+# dotfiles pull. PINNED because the classifier rides on pi's tool_call hook:
+# bump deliberately after re-running pi-code/eval against the new release.
+# ~/.local/bin/pi is the sandbox wrapper, never the bare binary.
+PI_VERSION="$(cat "$DOTFILES_DIR/pi-code/PI_VERSION" 2>/dev/null || true)"
+PI_ROOT="$HOME/.local/share/pi-agent"
+if [ -n "$PI_VERSION" ] && command -v npm >/dev/null 2>&1; then
+    if [ ! -x "$PI_ROOT/$PI_VERSION/bin/pi" ]; then
+        echo "installing pi $PI_VERSION (pi.dev coding agent) via npm..."
+        npm install -g --prefix "$PI_ROOT/$PI_VERSION" --ignore-scripts --no-fund --no-audit \
+            "@earendil-works/pi-coding-agent@$PI_VERSION" \
+            || echo "pi auto-install failed — see pi-code/README.md"
     fi
-    [ -x "$NPMBIN/pi" ] && ln -svfn "$NPMBIN/pi" ~/.local/bin/pi
+    if [ -x "$PI_ROOT/$PI_VERSION/bin/pi" ]; then
+        ln -sfn "$PI_VERSION" "$PI_ROOT/current"
+        # Keep only the pinned version.
+        for old in "$PI_ROOT"/*/; do
+            old="${old%/}"
+            [ "${old##*/}" = "$PI_VERSION" ] || [ "${old##*/}" = current ] || rm -rf -- "$old"
+        done
+        ln -svfn ~/.dotfiles/pi-code/pi.sh ~/.local/bin/pi
+        rm -f ~/.local/bin/pi-local   # retired: plain `pi` is the launcher now
+        mkdir -p ~/.pi/agent/extensions
+        ln -svfn ~/.dotfiles/pi-code/extensions ~/.pi/agent/extensions/homelab
+        # Defaults: the arbiter's default model, and an HTTP idle timeout past
+        # the arbiter's 600 s wait budget (pi's default of 300 s abandons
+        # requests the arbiter would have served). Other settings are kept.
+        # lastChangelogVersion: the sandbox discards pi's own settings writes,
+        # so without this pi would show the changelog on every launch.
+        if command -v jq >/dev/null; then
+            PI_SETTINGS=~/.pi/agent/settings.json
+            [ -s "$PI_SETTINGS" ] || echo '{}' > "$PI_SETTINGS"
+            tmp=$(mktemp "$PI_SETTINGS.tmp.XXXXXX")
+            jq --arg v "$PI_VERSION" '.defaultProvider = (.defaultProvider // "arbiter")
+                | .defaultModel = (.defaultModel // "default")
+                | .httpIdleTimeoutMs = ([(.httpIdleTimeoutMs // 0), 900000] | max)
+                | .lastChangelogVersion = $v' \
+                "$PI_SETTINGS" > "$tmp" && mv "$tmp" "$PI_SETTINGS" || rm -f "$tmp"
+        fi
+    fi
 fi
-command -v pi >/dev/null 2>&1 && ln -svfn ~/.dotfiles/pi-code/pi-local.sh ~/.local/bin/pi-local
 
 # Agent skills — shared across Copilot CLI, Codex, Claude Code, and opencode
 mkdir -p ~/.agents/skills ~/.claude/skills ~/.config/opencode/skills

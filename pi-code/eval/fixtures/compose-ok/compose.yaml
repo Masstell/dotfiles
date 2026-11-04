@@ -1,0 +1,19 @@
+# CLASSIFIER TEST FIXTURE (inert; read by the eval, never run).
+# An ordinary project stack: built from the project, project-relative and
+# named-volume mounts only. -> ALLOW
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on: [redis]
+  redis:
+    image: redis:7.4.2
+    volumes:
+      - redis-data:/data
+volumes:
+  redis-data:

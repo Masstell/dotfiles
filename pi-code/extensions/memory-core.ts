@@ -378,14 +378,19 @@ const SECRET_PATTERNS: [RegExp, string][] = [
   [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, "a JWT"],
   // Hex only counts directly after a secret word: bare hex is usually a commit or digest.
   [/\b(key|secret|token|password|passwd|bearer)\b\s*[:=]?\s*["']?[A-Fa-f0-9]{32,}\b/i, "a hex secret"],
-  // An assignment whose value is a literal, not a reference (op://, a path, $VAR,
-  // {{ var }}, <placeholder>, an ALL_CAPS variable name).
-  [/\b(password|passwd|passphrase|secret|api[_-]?key|token)\s*[:=]\s*(?!op:\/\/|[/~$<{]|vault\b|env\b|[A-Z][A-Z0-9_]*(?![^\s"'`,;]))[^\s"'`]{8,}/i, "a credential assignment"],
   [/\bpassword\s+(?:is|was)\s+(?!(?:stored|kept|saved|managed|in|at|from|the|a|an|set|rotated|changed)\b)\S{6,}/i, "a password"],
 ];
 
 export function secretIn(text: string): string | undefined {
   for (const [re, what] of SECRET_PATTERNS) if (re.test(text)) return what;
+  // An assignment whose value is a literal, not a reference: op://, a path,
+  // $VAR, {{ var }}, <placeholder>, vault/env, or an ALL_CAPS variable name
+  // (that last check is case-sensitive on purpose).
+  for (const m of text.matchAll(/\b(?:password|passwd|passphrase|secret|api[_-]?key|token)\s*[:=]\s*["']?([^\s"'`,;]{8,})/gi)) {
+    const v = m[1];
+    if (/^(op:\/\/|[/~$<{]|vault\b|env\b)/i.test(v) || /^[A-Z][A-Z0-9_]*$/.test(v)) continue;
+    return "a credential assignment";
+  }
   // Random-looking tokens: long and close to the entropy a random string of
   // that length would have. Paths (with lowercase word segments), commit
   // SHAs, digests and long identifiers fall well short.

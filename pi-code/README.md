@@ -68,16 +68,17 @@ extensions all run inside. The kernel enforces it; the model is never asked.
 
 | | Inside the sandbox |
 |---|---|
-| Project (git toplevel of `$PWD`, else `$PWD`) | read-write, except `.git/hooks` and `.git/config` (read-only: they run code when *you* next use git) |
+| Project (git toplevel of `$PWD`, else `$PWD`) | read-write, except `.git/hooks`, `.git/config`, this launcher, and any file home links into the project (read-only: they run outside the sandbox later) |
+| Started in `$HOME`, above it (incl. `/`), or under `/mnt` | read-only session — nothing is made writable |
 | `/tmp`, `/var/tmp` | private, empty, discarded at exit |
-| Tool caches (`~/.cache`, `~/.npm`, `~/.cargo`, `uv`, `pnpm`, `go/pkg`) | read-write |
+| Tool caches (`~/.cache`, `~/.npm`, `~/.cargo`, `~/.rustup`, `uv`, `pnpm`, `~/go`) | writable but throwaway (tmpfs overlay): `~/.cargo/bin`, `~/.cargo/env` and pre-commit envs run outside later |
 | Rest of home, `/etc`, `/usr`, … | read-only |
 | `/mnt/raid` (all of tank the VM mounts) | read-only; `PI_RW=<path>` to opt in |
 | `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.docker`, `~/.kube`, gh/op/gcloud, Claude/Codex/Gemini/opencode credentials, `.env`, shell histories | hidden (empty) |
 | SSH agent, `/run/user/<uid>` sockets | unreachable |
 | Environment | rebuilt from an allowlist; no keys |
 | Keys | on fd 3 to pi only; `secrets.ts` closes it before any tool runs |
-| `~/.pi/agent` | throwaway overlay; only `sessions/` persists |
+| `~/.pi/agent` | throwaway overlay; only `sessions/` persists; `auth.json` reads as `{}` |
 | sudo / setuid | no privilege gain |
 | Processes | own PID namespace |
 | **Docker** | **full access** (root daemon — the classifier's job) |
@@ -89,12 +90,17 @@ could switch the classifier off. So in-session writes go to a tmpfs that is
 discarded. The cost: `/settings`, `/trust` and `/login` changes made inside
 pi don't persist; make those with `PI_NOSANDBOX=1 pi` or edit the files.
 
+pi warns at exit if the project's `.git` was changed or replaced during the
+session — the read-only mounts can't stop the agent swapping `.git` wholesale.
+
 Starting pi in `$HOME` (or above it) gives a read-only session: you can look
 around and ask questions, but nothing in home is writable — a writable home
 would let the agent edit `~/.bashrc`, `~/.profile` or user systemd units, which
 run outside the sandbox at your next login. To start a new project, `mkdir`
-it and run `pi` inside. Run inside `~/dotfiles` and the agent can edit its own
-classifier source (it takes effect on the next launch, and shows in `git diff`).
+it and run `pi` inside. In `~/dotfiles` the agent can edit
+ordinary files, but not the launcher or anything home links to (`bashrc`,
+`~/.local/bin/*`, the Claude guard hook); the classifier source still shows up
+in `git diff` if it changes.
 
 **Docker is the hole, on purpose.** The VMs run their services in root
 Docker and the agent needs real docker access, so the socket stays reachable
@@ -122,7 +128,10 @@ down (rootless, or a filtering socket proxy) is a later project.
    - compose files for `docker compose up/run/create/start/restart`
      (`-f`, `--project-directory`, overrides);
    - Makefiles for `make` (`-f`, `-C`), justfiles for `just`;
-   - package.json `scripts` for `npm`/`yarn`/`pnpm`/`bun`.
+   - package.json `scripts` for `npm`/`yarn`/`pnpm`/`bun run`.
+   Wrapper flags with values (`sudo -u x`, `timeout -s KILL 30`) and
+   interpreter flags with values (`python3 -W ignore x.py`, `node -r ./pre.js`)
+   don't hide the script; arguments after the script are data, not code.
    A file it finds but can't fully vet — unreadable, over 64 KB, or more than
    4 — blocks. Code it can't see at all (`cat f | python3`, `bash -c
    "$(...)"`, `curl | sh`) is a named BLOCK in the policy.
@@ -143,7 +152,8 @@ The classifier always asks for `model: "default"`. After an advisor swap the
 arbiter holds that request until the default is back, so verdicts retry the
 contract's retryable codes (503 `model_swapping`, 408, 504, …) with backoff
 for up to 660 s — past the arbiter's 600 s budget — showing "classifier
-waiting for arbiter" in the footer, and fail closed after that.
+waiting for arbiter" in the footer, and fail closed after that. An arbiter that
+can't be reached at all (network down) fails closed after a minute instead.
 `PI_CLASSIFIER_DEADLINE_MS` overrides it.
 
 `PI_LOCAL_POLICY=<file>` swaps the policy (e.g. `policy/claude-code-full.md`,
@@ -173,7 +183,8 @@ they have a cooldown (`PI_ADVISOR_SWAP_COOLDOWN_S`, default 300).
 ## Web
 
 `web_search` (Brave Search API; registered only when `BRAVE_API_KEY` is set)
-returns titles, URLs and snippets. `web_fetch` GETs a URL and returns its text
+returns titles, URLs and snippets. `web_fetch` GETs a URL — judged by the
+classifier like the equivalent `curl` — and returns its text
 (HTML stripped, capped at ~40K chars) without a classified `curl` round trip.
 
 ## Eval

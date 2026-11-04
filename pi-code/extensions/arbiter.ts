@@ -54,6 +54,11 @@ export async function chat(body: any, opts: ChatOpts): Promise<ChatResult> {
   const deadline = Date.now() + (opts.deadlineMs ?? DEFAULT_DEADLINE_MS);
   let attempt = 0;
   let last: ChatResult = { ok: false, status: 0, code: "", text: "", model: "", data: null };
+  // The long deadline is for an arbiter that is busy (it answers 503/408/504).
+  // One that can't be reached at all gets a minute, so a down network doesn't
+  // stall every gated command for eleven minutes.
+  let unreachableSince = 0;
+  const UNREACHABLE_MS = 60_000;
   while (true) {
     attempt++;
     const remaining = deadline - Date.now();
@@ -82,6 +87,7 @@ export async function chat(body: any, opts: ChatOpts): Promise<ChatResult> {
         model: String(data?.model || ""),
         data,
       };
+      unreachableSince = 0;
       if (res.ok || !RETRYABLE.has(res.status)) return last;
       opts.onWait?.(`${res.status} ${last.code || "busy"}`, attempt);
     } catch (err: any) {
@@ -89,6 +95,8 @@ export async function chat(body: any, opts: ChatOpts): Promise<ChatResult> {
       if (ac.signal.aborted) return { ...last, ok: false, code: "deadline" };
       // Connection-level failure: treat like a transient arbiter outage.
       last = { ok: false, status: 0, code: String(err?.cause?.code || err?.message || err), text: "", model: "", data: null };
+      unreachableSince ||= Date.now();
+      if (Date.now() - unreachableSince > UNREACHABLE_MS) return { ...last, code: `unreachable: ${last.code}` };
       opts.onWait?.(`unreachable (${last.code})`, attempt);
     } finally {
       clearTimeout(timer);

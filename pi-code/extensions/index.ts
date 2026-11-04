@@ -15,8 +15,18 @@ import { readSecrets } from "./secrets.ts";
 
 export default async function (pi: any) {
   const secrets = readSecrets();
-  await registerArbiter(pi, secrets);
+  // The gate first, and outside any try: if anything below fails, bash must
+  // still be classified, not run unchecked.
   registerClassifier(pi, secrets);
-  registerAdvisor(pi, secrets);
-  registerWebTools(pi, secrets);
+  for (const [name, register] of [
+    ["arbiter provider", registerArbiter],
+    ["advisor", registerAdvisor],
+    ["web tools", registerWebTools],
+  ] as const) {
+    try {
+      await register(pi, secrets);
+    } catch (err: any) {
+      console.error(`homelab extensions: ${name} failed to load: ${String(err?.message || err)}`);
+    }
+  }
 }

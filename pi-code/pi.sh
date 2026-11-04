@@ -51,24 +51,38 @@ fi
 
 # --- Keys --------------------------------------------------------------------
 # Read in a subshell so nothing else from the env files leaks into this
-# process. They reach pi on fd 3 (secrets.ts reads and closes it), never via
-# the environment that every bash command would inherit.
-read_keys() {
+# process. The keys reach pi on fd 3 (secrets.ts reads and closes it), never
+# via the environment that every bash command would inherit. The arbiter URL
+# isn't secret: it is passed as an ordinary variable.
+read_env() {
     (
         set +u
         for f in "${HOME}/.dotfiles/.env" "${HOME}/.config/pi-agent/env"; do
             # shellcheck disable=SC1090
             [[ -f "$f" ]] && { set -a; source "$f"; set +a; }
         done
-        printf 'PI_ARBITER_KEY=%s\nBRAVE_API_KEY=%s\n' \
-            "${PI_ARBITER_KEY:-${OPENCODE_ARBITER_KEY:-}}" "${BRAVE_API_KEY:-}"
+        printf 'PI_ARBITER_KEY=%s\nBRAVE_API_KEY=%s\nPI_ARBITER_URL=%s\n' \
+            "${PI_ARBITER_KEY:-${OPENCODE_ARBITER_KEY:-${LLAMA_API_KEY:-}}}" \
+            "${BRAVE_API_KEY:-}" \
+            "${PI_ARBITER_URL:-${OPENCODE_LLM_URL:-${LLAMA_URL:-}}}"
     )
 }
-KEYS="$(read_keys)"
+_env="$(read_env)"
+KEYS="$(grep -E '^(PI_ARBITER_KEY|BRAVE_API_KEY)=' <<<"$_env")"
+_url="$(sed -n 's/^PI_ARBITER_URL=//p' <<<"$_env")"
+[[ -n "$_url" && -z "${PI_ARBITER_URL:-}" ]] && export PI_ARBITER_URL="$_url"
+unset _env _url
 if [[ -z "$(sed -n 's/^PI_ARBITER_KEY=//p' <<<"$KEYS")" ]]; then
-    echo "pi: no arbiter key. Set PI_ARBITER_KEY in ~/.dotfiles/.env (or ~/.config/pi-agent/env)." >&2
+    echo "pi: no arbiter key. Set PI_ARBITER_KEY in ~/.config/pi-agent/env (Ansible) or ~/.dotfiles/.env." >&2
     exit 1
 fi
+
+# The extensions are what gate bash. They auto-load from the agent dir, so
+# make sure the link is there (a fresh PI_CODING_AGENT_DIR won't have it)
+# rather than start an agent with no classifier.
+mkdir -p "${AGENT_DIR}/extensions"
+[[ -e "${AGENT_DIR}/extensions/homelab/index.ts" ]] ||
+    ln -sfn "${PI_CODE_DIR}/extensions" "${AGENT_DIR}/extensions/homelab"
 
 if [[ "${PI_NOSANDBOX:-}" == 1 ]]; then
     echo "pi: ⚠️  PI_NOSANDBOX=1 — running WITHOUT the sandbox; the classifier is the only guard." >&2
@@ -84,15 +98,21 @@ fi
 
 # --- Project -------------------------------------------------------------------
 PROJECT="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || pwd -P)"
-# Starting in $HOME (or above it) is allowed, but nothing is made writable:
-# a writable home would let the agent edit ~/.bashrc, ~/.profile or user
-# systemd units, which run OUTSIDE the sandbox at your next login. Read-only
-# session; mkdir a project and start pi there to edit.
+REAL_HOME="$(readlink -f "$HOME")"
+# Some starting points get a read-only session instead of a writable project:
+#   - $HOME or anything above it (incl. /): a writable home lets the agent
+#     edit ~/.bashrc, ~/.profile or user units, which run OUTSIDE the sandbox
+#     at your next login;
+#   - the storage array: tank is read-only to pi unless you say PI_RW=<path>.
 RW_PROJECT=1
-if [[ "$HOME/" == "$PROJECT/"* ]]; then
+if [[ "$PROJECT" == / || "$REAL_HOME/" == "$PROJECT/"* ]]; then
     RW_PROJECT=0
     echo "pi: started in ${PROJECT} — read-only session (nothing in home is writable)." >&2
     echo "    To start a new project: mkdir ~/<name> && cd ~/<name> && pi" >&2
+elif [[ "$PROJECT/" == /mnt/* ]]; then
+    RW_PROJECT=0
+    echo "pi: ${PROJECT} is on the storage array — read-only session." >&2
+    echo "    To let pi write there: PI_RW=${PROJECT} pi" >&2
 fi
 
 args=(
@@ -111,8 +131,8 @@ if [[ "$(sysctl -n dev.tty.legacy_tiocsti 2>/dev/null || echo 1)" != 0 ]]; then
 fi
 
 # Mount order matters — later mounts land on top. Writable things first (the
-# project, extra paths, caches), then the hiding and the read-only carve-outs,
-# so a project that contains home still can't uncover ~/.ssh or pi's config.
+# project, extra paths, caches), then the read-only carve-outs and the hiding,
+# so nothing writable can uncover a secret or a file that runs outside.
 
 # The project, plus any explicitly requested extra paths.
 [[ "$RW_PROJECT" == 1 ]] && args+=(--bind "$PROJECT" "$PROJECT")
@@ -125,13 +145,35 @@ for p in "${_extra[@]}"; do
     args+=(--bind "$p" "$p")
 done
 
-# Tool caches stay writable so installs and builds work.
-for d in .cache .npm .cargo .rustup .local/share/uv .local/share/pnpm go/pkg; do
-    [[ -d "${HOME}/${d}" ]] && args+=(--bind "${HOME}/${d}" "${HOME}/${d}")
+# Tool caches: writable but throwaway. Several of them run code outside the
+# sandbox later (~/.cargo/bin is on PATH, ~/.cargo/env is sourced at login,
+# pre-commit hook envs live in ~/.cache), so writes go to a tmpfs overlay and
+# vanish at exit. Installs and builds work; cache misses re-download.
+for d in .cache .npm .cargo .rustup .local/share/uv .local/share/pnpm go; do
+    [[ -d "${HOME}/${d}" && ! -L "${HOME}/${d}" ]] && args+=(--overlay-src "${HOME}/${d}" --tmp-overlay "${HOME}/${d}")
 done
 
-hide_dir()  { [[ -d "$1" && ! -L "$1" ]] && args+=(--tmpfs "$1"); return 0; }
-hide_file() { [[ -f "$1" ]] && args+=(--ro-bind /dev/null "$1"); return 0; }
+# Anything that runs outside the sandbox but lives inside the project stays
+# read-only: this launcher and its extensions, and every file home links into
+# the project (in ~/dotfiles that is ~/.bashrc, ~/.local/bin/*, the Claude
+# guard hook, ...).
+_writable=()
+[[ "$RW_PROJECT" == 1 ]] && _writable+=("$PROJECT")
+for p in "${_extra[@]}"; do [[ -n "$p" ]] && _writable+=("$(readlink -f "$p")"); done
+inside_writable() {
+    local w
+    for w in "${_writable[@]}"; do [[ "$1" == "$w"/* ]] && return 0; done
+    return 1
+}
+inside_writable "$PI_CODE_DIR/x" && args+=(--ro-bind "$PI_CODE_DIR" "$PI_CODE_DIR")
+while IFS= read -r -d '' link; do
+    t="$(readlink -f "$link" 2>/dev/null)" || continue
+    [[ -e "$t" ]] && inside_writable "$t" && args+=(--ro-bind "$t" "$t")
+done < <(find "$HOME" -maxdepth 3 -type l -print0 2>/dev/null)
+
+# Hide a path, following symlinks to what they point at.
+hide_dir()  { local t; t="$(readlink -f "$1" 2>/dev/null)" || return 0; [[ -d "$t" ]] && args+=(--tmpfs "$t"); return 0; }
+hide_file() { local t; t="$(readlink -f "$1" 2>/dev/null)" || return 0; [[ -f "$t" ]] && args+=(--ro-bind /dev/null "$t"); return 0; }
 
 # Credentials and anything that holds them.
 for d in .ssh .gnupg .aws .azure .kube .docker .config/gh .config/op \
@@ -141,12 +183,9 @@ for d in .ssh .gnupg .aws .azure .kube .docker .config/gh .config/op \
 done
 for f in .claude.json .netrc .git-credentials .npmrc .pypirc .bash_history \
          .zsh_history .python_history .node_repl_history .psql_history \
-         .mysql_history .lesshst .viminfo; do
+         .mysql_history .lesshst .viminfo .dotfiles/.env; do
     hide_file "${HOME}/${f}"
 done
-# The dotfiles env file (keys) — hidden at its real path.
-_dotenv="$(readlink -f "${HOME}/.dotfiles" 2>/dev/null || true)/.env"
-hide_file "$_dotenv"
 # Per-user runtime sockets (systemd user bus, gpg-agent, forwarded agents).
 hide_dir "/run/user/$(id -u)"
 
@@ -154,20 +193,34 @@ hide_dir "/run/user/$(id -u)"
 # lock its config freely in-session, but every write lands in a tmpfs that is
 # discarded at exit — so settings, trust, extensions, packages or system
 # prompt files the agent plants never reach the next launch. Only sessions
-# persist, through a real writable mount on top.
+# persist, through a real writable mount on top. auth.json (/login tokens for
+# other providers) reads as empty: our keys come over fd 3, not from there.
 mkdir -p "${AGENT_DIR}/sessions"
 args+=(
     --overlay-src "$AGENT_DIR" --tmp-overlay "$AGENT_DIR"
     --bind "${AGENT_DIR}/sessions" "${AGENT_DIR}/sessions"
 )
+[[ -f "${AGENT_DIR}/auth.json" ]] && args+=(--ro-bind-data 4 "${AGENT_DIR}/auth.json")
 
-# Git parts that run code later, outside the sandbox, when the human next
-# uses the repo: hooks, and config (core.hooksPath, core.fsmonitor, aliases).
-if [[ -d "$PROJECT/.git" ]]; then
-    mkdir -p "$PROJECT/.git/hooks"
-    args+=(--ro-bind "$PROJECT/.git/hooks" "$PROJECT/.git/hooks")
-    [[ -f "$PROJECT/.git/config" ]] && args+=(--ro-bind "$PROJECT/.git/config" "$PROJECT/.git/config")
+# Git parts that run code later, outside the sandbox, when the human next uses
+# the repo: hooks, and config (core.hooksPath, core.fsmonitor, aliases). The
+# mounts can't stop the agent replacing .git wholesale, so the launcher also
+# fingerprints the git metadata and warns at exit if it changed.
+_git="$PROJECT/.git"
+if [[ "$RW_PROJECT" == 1 && -d "$_git" ]]; then
+    mkdir -p "$_git/hooks"
+    args+=(--ro-bind "$_git/hooks" "$_git/hooks")
+    [[ -f "$_git/config" ]] && args+=(--ro-bind "$_git/config" "$_git/config")
+elif [[ "$RW_PROJECT" == 1 && -f "$_git" ]]; then
+    args+=(--ro-bind "$_git" "$_git")   # worktree/submodule pointer file
 fi
+git_fingerprint() {
+    [[ -e "$_git" ]] || { echo none; return; }
+    { stat -c '%i' "$_git"; [[ -f "$_git" ]] && cat "$_git"
+      cat "$_git/config" "$_git/commondir" 2>/dev/null
+      ls -la --time-style=+%s "$_git/hooks" 2>/dev/null
+    } | sha256sum
+}
 
 # --- Environment: rebuilt from an allowlist -------------------------------------
 args+=(--clearenv)
@@ -189,4 +242,11 @@ args+=(
 )
 
 [[ "${PI_LOCAL_READONLY:-}" =~ ^(1|true|yes|on)$ ]] && echo "pi: READ-ONLY / plan mode is ON." >&2
-exec bwrap "${args[@]}" -- "$PI_BIN" "$@" 3<<<"$KEYS"
+_before="$(git_fingerprint)"
+rc=0
+bwrap "${args[@]}" -- "$PI_BIN" "$@" 3<<<"$KEYS" 4<<<'{}' || rc=$?
+if [[ "$(git_fingerprint)" != "$_before" ]]; then
+    echo "pi: ⚠️  ${_git} was changed or replaced during this session (config, hooks or the .git" >&2
+    echo "    entry itself). Inspect .git/config and .git/hooks before running git outside pi." >&2
+fi
+exit "$rc"

@@ -39,7 +39,7 @@ const DEADLINE_MS = Number(process.env.PI_CLASSIFIER_DEADLINE_MS || "") || 660_0
 type Case = {
   id: number; category: string; cmd: string; cwd?: string; expect: "allow" | "block";
   sandbox?: "allow" | "block" | "soft"; critical?: boolean; soft?: boolean;
-  no_fast?: boolean; must_read?: string; must_inline?: boolean; note?: string;
+  no_fast?: boolean; must_read?: string; must_not_read?: string; must_inline?: boolean; note?: string;
 };
 
 const sub = (s: string) => s.replaceAll("{FIX}", FIX);
@@ -70,6 +70,7 @@ async function decide(c: Case): Promise<{ got: "allow" | "block"; path: string; 
   if (c.must_read && !read.has(c.must_read)) {
     return { got: "allow", path: "SCANBUG", reason: `INVARIANT: ${c.must_read} not read (got ${[...read].join(",") || "none"})`, dt: 0 };
   }
+  if (c.must_not_read && read.has(c.must_not_read)) return { got: "allow", path: "SCANBUG", reason: `INVARIANT: ${c.must_not_read} was read as code`, dt: 0 };
   if (c.must_inline && read.size) return { got: "allow", path: "SCANBUG", reason: `INVARIANT: inline command read ${[...read]}`, dt: 0 };
   if (scan.block) return { got: "block", path: "scan", reason: scan.block, dt: 0 };
   if (OFFLINE) return { got: "allow", path: "skipped", reason: `would ask the model${read.size ? ` with ${[...read].join(", ")}` : ""}`, dt: 0 };

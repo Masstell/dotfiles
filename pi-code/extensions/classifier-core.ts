@@ -96,8 +96,19 @@ const INTERPRETERS = new Set([
 ]);
 // Inline code: the code is in the command text itself — nothing to read.
 const INLINE_FLAG = /^(-c|-e|--eval|-)$/;
-// Prefixes that run their arguments as the real command.
-const WRAPPERS = new Set(["env", "nice", "nohup", "time", "stdbuf", "exec", "command", "setsid", "sudo", "timeout"]);
+// Prefixes that run their arguments as the real command, with the flags of
+// theirs that take a value (so `sudo -u x cmd` skips `x`, not just `-u`).
+const WRAPPERS: Record<string, Set<string>> = {
+  env: new Set(["-u", "--unset", "-C", "--chdir", "-S", "--split-string"]),
+  sudo: new Set(["-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "--user", "--group", "--chdir"]),
+  timeout: new Set(["-s", "--signal", "-k", "--kill-after"]),
+  nice: new Set(["-n", "--adjustment"]),
+  stdbuf: new Set(["-i", "-o", "-e"]),
+  ionice: new Set(["-c", "-n", "-p"]),
+  nohup: new Set(), time: new Set(), exec: new Set(), command: new Set(), setsid: new Set(),
+};
+// Extensions that mark a bare first word (`uv run evil.py`) as a script.
+const SCRIPT_EXT = /\.(py|sh|bash|js|mjs|cjs|ts|mts|rb|pl|php|lua|R)$/;
 // `<runner> run <cmd...>` style project runners.
 const RUNNERS = new Set(["uv", "poetry", "pipenv", "pdm", "hatch", "rye"]);
 const SEGMENT_SPLIT = /[;&|\n]+/;
@@ -131,15 +142,24 @@ export function resolvePath(tok: string, cwd: string): string {
   return isAbsolute(s) ? s : resolve(cwd, s);
 }
 
-type Want = { path: string; kind: string; mustExist?: boolean };
+type Want = { path: string; kind: string };
 
 function stripWrappers(toks: string[]): string[] {
   let t = toks;
   while (t.length) {
     const h = t[0];
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(h) || WRAPPERS.has(h)) { t = t.slice(1); continue; }
-    // `timeout 30 cmd`, `sudo -u x cmd`: drop the wrapper's own flags/values.
-    if (/^-/.test(h) || /^\d+[smhd]?$/.test(h)) { t = t.slice(1); continue; }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(h)) { t = t.slice(1); continue; }
+    const valued = WRAPPERS[basenameOf(h)];
+    if (valued) {
+      t = t.slice(1);
+      // The wrapper's own flags (and their values), then e.g. timeout's duration.
+      while (t.length) {
+        if (valued.has(t[0])) { t = t.slice(2); continue; }
+        if (t[0].startsWith("-") || /^\d+(\.\d+)?[smhd]?$/.test(t[0])) { t = t.slice(1); continue; }
+        break;
+      }
+      continue;
+    }
     if (RUNNERS.has(h) && t[1] === "run") {
       t = t.slice(2);
       while (t.length && t[0].startsWith("-")) t = t.slice(1);
@@ -148,6 +168,10 @@ function stripWrappers(toks: string[]): string[] {
     break;
   }
   return t;
+}
+
+function isFile(p: string): boolean {
+  try { return statSync(p).isFile(); } catch { return false; }
 }
 
 // Value of `-f X`, `-fX`, `--file X`, `--file=X` style flags (all occurrences).
@@ -180,27 +204,50 @@ function wantsForSegment(seg: string, cwd: string): Want[] {
     return toks[1] ? [{ path: resolvePath(toks[1], cwd), kind: "script" }] : [];
   }
 
+  // bun is both an interpreter and a package manager: `bun run build`,
+  // `bun install` run package.json scripts; `bun x.ts` runs a file.
+  if (base === "bun" && toks[1] && !isFile(resolvePath(toks[1], cwd)) && !toks[1].startsWith("-")) {
+    const pj = join(cwd, "package.json");
+    return existsSync(pj) ? [{ path: pj, kind: "package.json scripts" }] : [];
+  }
+
   if (INTERPRETERS.has(base)) {
+    // Every argument that is an existing file gets read, not just the first
+    // non-flag one: flags with values (`python3 -W ignore x.py`,
+    // `node -r ./pre.js x.js`) otherwise hide the real script.
     const rest = toks.slice(1);
+    const out: Want[] = [];
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i];
-      if (a === "<") return rest[i + 1] ? [{ path: resolvePath(rest[i + 1], cwd), kind: "script" }] : [];
-      if (a.startsWith("<")) return [{ path: resolvePath(a.slice(1), cwd), kind: "script" }];
-      if (INLINE_FLAG.test(a)) return [];
+      if (a === "<") { if (rest[i + 1]) out.push({ path: resolvePath(rest[i + 1], cwd), kind: "script" }); break; }
+      if (a.startsWith("<")) { out.push({ path: resolvePath(a.slice(1), cwd), kind: "script" }); break; }
+      if (INLINE_FLAG.test(a)) break;
       if (a === "-m" || a === "--module") {
         // `python -m pkg.mod`: a project module is a script like any other;
         // a stdlib/installed module (http.server, pip) isn't in cwd — no file.
         const mod = rest[i + 1];
-        if (!mod) return [];
-        const rel = mod.replace(/\./g, "/");
-        const file = firstExisting(cwd, [`${rel}.py`, `${rel}/__main__.py`]);
-        return file ? [{ path: file, kind: "script" }] : [];
+        if (mod) {
+          const rel = mod.replace(/\./g, "/");
+          const file = firstExisting(cwd, [`${rel}.py`, `${rel}/__main__.py`]);
+          if (file) out.push({ path: file, kind: "script" });
+        }
+        break;
       }
-      if (a === "run" && base === "deno") continue;
-      if (a.startsWith("-")) continue;
-      return [{ path: resolvePath(a, cwd), kind: "script" }];
+      if (a.startsWith("-")) {
+        // `--require=./pre.js`: a file passed as a flag value also runs.
+        const v = a.includes("=") ? resolvePath(a.slice(a.indexOf("=") + 1), cwd) : "";
+        if (v && isFile(v)) out.push({ path: v, kind: "script" });
+        continue;
+      }
+      const path = resolvePath(a, cwd);
+      if (!isFile(path)) continue; // a flag's value (`-W ignore`), not the script
+      out.push({ path, kind: "script" });
+      // A file right after a flag is that flag's value (`node -r ./pre.js
+      // x.js`): keep looking. Otherwise it is the script, and what follows
+      // are its own arguments (data files), not code.
+      if (!(i > 0 && rest[i - 1].startsWith("-") && !rest[i - 1].includes("="))) break;
     }
-    return [];
+    return out;
   }
 
   // docker compose / docker-compose: the compose file decides mounts,
@@ -212,8 +259,9 @@ function wantsForSegment(seg: string, cwd: string): Want[] {
     if (!sub || !COMPOSE_RUNS.has(sub)) return [];
     const projDir = flagValues(args, "--project-directory", "--project-directory")[0];
     const dir = projDir ? resolvePath(projDir, cwd) : cwd;
+    // -f is relative to the cwd, not --project-directory.
     const files = flagValues(args, "-f", "--file");
-    if (files.length) return files.map((f) => ({ path: resolvePath(f, dir), kind: "compose file", mustExist: true }));
+    if (files.length) return files.map((f) => ({ path: resolvePath(f, cwd), kind: "compose file" }));
     const main = firstExisting(dir, COMPOSE_DEFAULTS);
     if (!main) return [];
     const over = firstExisting(dir, COMPOSE_OVERRIDES);
@@ -224,7 +272,7 @@ function wantsForSegment(seg: string, cwd: string): Want[] {
     const dirArg = flagValues(toks.slice(1), "-C", "--directory")[0];
     const dir = dirArg ? resolvePath(dirArg, cwd) : cwd;
     const files = flagValues(toks.slice(1), "-f", "--file");
-    if (files.length) return files.map((f) => ({ path: resolvePath(f, dir), kind: "Makefile", mustExist: true }));
+    if (files.length) return files.map((f) => ({ path: resolvePath(f, dir), kind: "Makefile" }));
     const mk = firstExisting(dir, MAKEFILES);
     return mk ? [{ path: mk, kind: "Makefile" }] : [];
   }
@@ -232,12 +280,12 @@ function wantsForSegment(seg: string, cwd: string): Want[] {
   if (base === "just") {
     const jf = flagValues(toks.slice(1), "-f", "--justfile")[0];
     const file = jf ? resolvePath(jf, cwd) : firstExisting(cwd, JUSTFILES);
-    return file ? [{ path: file, kind: "justfile", mustExist: !!jf }] : [];
+    return file ? [{ path: file, kind: "justfile" }] : [];
   }
 
   // npm/yarn/pnpm/bun run the project's package.json scripts (and lifecycle
   // hooks on install), so those scripts are what executes.
-  if (["npm", "yarn", "pnpm", "bun", "npx"].includes(base)) {
+  if (["npm", "yarn", "pnpm", "npx"].includes(base)) {
     const verb = toks[1] || "";
     if (base === "npx" || PKG_READONLY.has(verb)) return [];
     const pkgDir = flagValues(toks.slice(1), "--prefix", "--prefix")[0] || flagValues(toks.slice(1), "-C", "--dir")[0];
@@ -245,8 +293,13 @@ function wantsForSegment(seg: string, cwd: string): Want[] {
     return existsSync(pj) ? [{ path: pj, kind: "package.json scripts" }] : [];
   }
 
-  // Direct execution of a path (./x, ../x, /abs/x, dir/x).
-  if (head.includes("/")) return [{ path: resolvePath(head, cwd), kind: "script" }];
+  // Direct execution of a path (./x, ../x, /abs/x, dir/x), or a bare script
+  // name a runner was handed (`uv run evil.py`).
+  if (head.includes("/") || SCRIPT_EXT.test(head)) return [{ path: resolvePath(head, cwd), kind: "script" }];
+  // An unrecognized wrapper in front of an interpreter (`chronic python3 x.py`):
+  // start over from the first interpreter word.
+  const k = toks.findIndex((t, i) => i > 0 && INTERPRETERS.has(basenameOf(t)));
+  if (k > 0) return wantsForSegment(toks.slice(k).join(" "), cwd);
   return [];
 }
 

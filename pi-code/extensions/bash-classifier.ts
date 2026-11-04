@@ -76,11 +76,21 @@ export default function registerClassifier(pi: any, secrets: Secrets) {
         }
       }
 
+      const cwd = ctx?.cwd || process.cwd();
+
+      // web_fetch is an outbound request like any `curl`: judge it as one, so
+      // data packed into a URL or a call to LAN infrastructure gets a verdict.
+      if (tool === "web_fetch") {
+        const url = String(input.url ?? "").replace(/'/g, "%27");
+        const verdict = await classify(`curl -sL '${url}'`, cwd, { files: [] }, secrets.arbiterKey, ctx);
+        if (verdict.decision === "block") return blocked(ctx, verdict.reason || "unsafe request");
+        return;
+      }
+
       if (tool !== "bash") return;
       const command = String(input.command ?? "");
       if (!command.trim() || fastPathSafe(command)) return;
 
-      const cwd = ctx?.cwd || process.cwd();
       const scan = scanCommand(command, cwd);
       if (scan.block) return blocked(ctx, scan.block);
       const verdict = await classify(command, cwd, scan, secrets.arbiterKey, ctx);

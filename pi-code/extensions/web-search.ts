@@ -76,7 +76,18 @@ export default function registerWebTools(pi: any, secrets: Secrets) {
         signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)].filter(Boolean)),
       });
       const type = res.headers.get("content-type") || "";
-      const body = await res.text();
+      // Stream at most ~2 MB rather than buffering an arbitrarily large body.
+      const reader = res.body?.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      while (reader && size < 2_000_000) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        size += value.length;
+      }
+      try { await reader?.cancel(); } catch { /* already closed */ }
+      const body = new TextDecoder().decode(Buffer.concat(chunks));
       let text = /html/i.test(type) ? htmlToText(body) : body;
       const truncated = text.length > FETCH_MAX_CHARS;
       if (truncated) text = text.slice(0, FETCH_MAX_CHARS) + "\n\n[truncated]";

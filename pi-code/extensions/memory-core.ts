@@ -210,10 +210,14 @@ const STOP = new Set(
    "please thanks okay yes now new some more most very can't don't won't should've file files code thing").split(" "),
 );
 
+// Plurals match their singular ("deploys" = "deploy", "migrations" = "migration").
+const stem = (t: string) => (t.length > 4 && t.endsWith("s") && !t.endsWith("ss") ? t.slice(0, -1) : t);
+
 export function terms(text: string): string[] {
   return (text.toLowerCase().match(/[a-z0-9][a-z0-9_.\-/]*[a-z0-9]|[a-z0-9]/g) || [])
     .flatMap((t) => [t, ...t.split(/[_.\-/]+/)])
-    .filter((t) => t.length >= 3 && !STOP.has(t));
+    .filter((t) => t.length >= 3 && !STOP.has(t))
+    .map(stem);
 }
 
 export type Recall = { note: Note; score: number; matched: string[] };
@@ -283,24 +287,23 @@ export function secretIn(text: string): string | undefined {
   return undefined;
 }
 
-function jaccard(a: Set<string>, b: Set<string>): number {
-  if (!a.size || !b.size) return 0;
-  let i = 0;
-  for (const x of a) if (b.has(x)) i++;
-  return i / (a.size + b.size - i);
-}
-
-/** Another note that covers the same ground (so the model should update it instead). */
+/** Another note that covers the same ground (so the model should update it instead).
+ *  Overlap is measured against the smaller signature, so a note restated with
+ *  different extra words still counts; at least 3 shared terms are required so
+ *  two distinct notes about the same area (deploys) do not collide. */
 export function nearDuplicate(cand: { name: string; description: string; keywords: string[] }, notes: Note[]): Note | undefined {
-  const sig = (n: { description: string; keywords: string[] }) =>
-    new Set([...terms(n.description), ...n.keywords.flatMap((k) => terms(k))]);
+  const sig = (n: { name: string; description: string; keywords: string[] }) =>
+    new Set([...terms(n.name), ...terms(n.description), ...n.keywords.flatMap((k) => terms(k))]);
   const c = sig(cand);
   let best: Note | undefined;
   let bestScore = 0;
   for (const n of notes) {
     if (n.name === cand.name) continue;
-    const s = jaccard(c, sig(n));
-    if (s > bestScore) { bestScore = s; best = n; }
+    const s2 = sig(n);
+    let shared = 0;
+    for (const x of c) if (s2.has(x)) shared++;
+    const score = shared >= 3 ? shared / Math.min(c.size, s2.size) : 0;
+    if (score > bestScore) { bestScore = score; best = n; }
   }
   return bestScore >= 0.6 ? best : undefined;
 }

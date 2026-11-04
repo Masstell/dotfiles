@@ -72,7 +72,18 @@ const rejects: [string, any, RegExp][] = [
   ["credential assignment", { ...base, content: "set password=hunter2hunter2 in the env" }, /credential/],
   ["long opaque token", { ...base, content: "the bearer is Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3A" }, /token-like/],
   ["near-duplicate of deploy note", { ...base, name: "staging-wireguard", description: "Deploys to staging fail unless the WireGuard tunnel is up", keywords: ["deploy", "staging", "wireguard", "vpn"] }, /deploy-needs-vpn/],
+  // Reworded, with different extra terms (a live test let one like this through).
+  ["reworded duplicate", { ...base, name: "deploy-needs-wg0-tunnel", description: "Staging deploys need the wg0 WireGuard tunnel up; a hang at ssh means it is down", keywords: ["wg0", "wireguard", "tunnel", "ssh", "hang"] }, /deploy-needs-vpn/],
+  ["near-duplicate of migrations", { ...base, name: "alembic-in-container", description: "Run alembic migrations inside the api container", keywords: ["alembic", "migration"] }, /migrations-alembic/],
 ];
+// Related but distinct notes must still be accepted.
+for (const [label, cand] of [
+  ["distinct deploy note", { ...base, name: "deploy-is-blue-green", description: "Production deploys are blue-green behind the load balancer", keywords: ["deploy", "production", "blue-green"] }],
+  ["distinct database note", { ...base, name: "db-backups-nightly", description: "The database is backed up nightly to the NAS", keywords: ["database", "backup", "nas"] }],
+] as const) {
+  const err = checkCandidate(cand as any, notes);
+  check(`accepts ${label}`, err === undefined, err);
+}
 for (const [label, cand, re] of rejects) {
   const err = checkCandidate(cand, notes) || "";
   check(`rejects ${label}`, re.test(err), err || "accepted");

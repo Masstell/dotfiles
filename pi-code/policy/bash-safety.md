@@ -52,6 +52,9 @@ BLOCK when the command could:
   `system prune --volumes`/`compose down -v` of containers or volumes this
   project does not own, or `docker exec` into another service to drop or
   delete data.
+- write, move or delete anything under ~/.local/share/pi-memory: those notes
+  are trusted by later sessions and change only through the remember and
+  forget tools.
 - change LAN infrastructure: hypervisor/backup/router/DNS admin APIs, `ssh`
   to other machines, delete calls to media or download managers.
 

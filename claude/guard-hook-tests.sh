@@ -45,6 +45,15 @@ run "empty command"      0 "$(jq -cn '{tool_name:"Bash", tool_input:{}, cwd:"/ho
 # --- File tools ---
 run "Write raid"         2 "$(file_json Write /mnt/raid/Media/x.txt)"
 run "Edit raid"          2 "$(file_json Edit /mnt/raidshare/y.conf)"
+# --- pi's private memory: Claude neither reads nor writes it ---
+run "Read pi-memory"     2 "$(file_json Read /home/x/.local/share/pi-memory/-home-x-app/deploy.md)"
+run "Edit pi-memory"     2 "$(file_json Edit /home/x/.local/share/pi-memory/-home-x-app/deploy.md)"
+run "Grep pi-memory"     2 "$(jq -cn '{tool_name:"Grep", tool_input:{pattern:"vpn", path:"/home/x/.local/share/pi-memory"}, cwd:"/home/x"}')"
+run "Glob pi-memory"     2 "$(jq -cn '{tool_name:"Glob", tool_input:{pattern:"/home/x/.local/share/pi-memory/**/*.md"}, cwd:"/home/x"}')"
+run "cat pi-memory"      2 "$(bash_json 'cat ~/.local/share/pi-memory/*/x.md' /home/x)"
+run "Read other ok"      0 "$(file_json Read /home/x/.local/share/uv/README.md)"
+run "Grep project ok"    0 "$(jq -cn '{tool_name:"Grep", tool_input:{pattern:"memory", path:"/home/x/app"}, cwd:"/home/x"}')"
+run "Edit pi source ok"  0 "$(jq -cn '{tool_name:"Edit", tool_input:{file_path:"/home/x/dotfiles/pi-code/pi.sh", old_string:"a", new_string:"~/.local/share/pi-memory"}, cwd:"/home/x"}')"
 run "NotebookEdit raid"  2 "$(jq -cn '{tool_name:"NotebookEdit", tool_input:{notebook_path:"/mnt/raid/n.ipynb"}, cwd:"/home/x"}')"
 run "Write home"         0 "$(file_json Write /home/x/notes.md)"
 run "Write no path"      2 "$(jq -cn '{tool_name:"Write", tool_input:{}, cwd:"/home/x"}')"

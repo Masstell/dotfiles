@@ -6,11 +6,13 @@
 //   bash-classifier   tool_call gate: every non-trivial bash command is judged
 //   advisor           ask_advisor tool + /advisor command (second opinion)
 //   web-search        web_search (Brave, when a key is set) + web_fetch
+//   memory            per-project memory: remember/forget, index, recall, /memories
 
 import registerArbiter from "./arbiter-provider.ts";
 import registerClassifier from "./bash-classifier.ts";
 import registerAdvisor from "./advisor.ts";
 import registerWebTools from "./web-search.ts";
+import registerMemory from "./memory.ts";
 import { readSecrets } from "./secrets.ts";
 
 export default async function (pi: any) {
@@ -22,6 +24,7 @@ export default async function (pi: any) {
     ["arbiter provider", registerArbiter],
     ["advisor", registerAdvisor],
     ["web tools", registerWebTools],
+    ["memory", registerMemory],
   ] as const) {
     try {
       await register(pi, secrets);

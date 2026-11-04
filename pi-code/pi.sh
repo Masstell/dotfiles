@@ -61,17 +61,20 @@ read_env() {
             # shellcheck disable=SC1090
             [[ -f "$f" ]] && { set -a; source "$f"; set +a; }
         done
-        printf 'PI_ARBITER_KEY=%s\nBRAVE_API_KEY=%s\nPI_ARBITER_URL=%s\n' \
+        printf 'PI_ARBITER_KEY=%s\nBRAVE_API_KEY=%s\nPI_ARBITER_URL=%s\nPI_CLAUDE_MEMORY=%s\n' \
             "${PI_ARBITER_KEY:-${OPENCODE_ARBITER_KEY:-${LLAMA_API_KEY:-}}}" \
             "${BRAVE_API_KEY:-}" \
-            "${PI_ARBITER_URL:-${OPENCODE_LLM_URL:-${LLAMA_URL:-}}}"
+            "${PI_ARBITER_URL:-${OPENCODE_LLM_URL:-${LLAMA_URL:-}}}" \
+            "${PI_CLAUDE_MEMORY:-}"
     )
 }
 _env="$(read_env)"
 KEYS="$(grep -E '^(PI_ARBITER_KEY|BRAVE_API_KEY)=' <<<"$_env")"
 _url="$(sed -n 's/^PI_ARBITER_URL=//p' <<<"$_env")"
 [[ -n "$_url" && -z "${PI_ARBITER_URL:-}" ]] && export PI_ARBITER_URL="$_url"
-unset _env _url
+_cm="$(sed -n 's/^PI_CLAUDE_MEMORY=//p' <<<"$_env")"
+[[ -n "$_cm" && -z "${PI_CLAUDE_MEMORY:-}" ]] && export PI_CLAUDE_MEMORY="$_cm"
+unset _env _url _cm
 if [[ -z "$(sed -n 's/^PI_ARBITER_KEY=//p' <<<"$KEYS")" ]]; then
     echo "pi: no arbiter key. Set PI_ARBITER_KEY in ~/.config/pi-agent/env (Ansible) or ~/.dotfiles/.env." >&2
     exit 1
@@ -194,6 +197,22 @@ _cc_projects="$(readlink -f "${HOME}/.claude/projects" 2>/dev/null)"
 # Per-user runtime sockets (systemd user bus, gpg-agent, forwarded agents).
 hide_dir "/run/user/$(id -u)"
 
+# Project memory (extensions/memory.ts): only this project's folder under
+# ~/.local/share/pi-memory is writable. The project is the git root shared by
+# worktrees, else $PROJECT; the slug matches memory-core.ts. Claude Code's
+# guard hook keeps Claude out of ~/.local/share/pi-memory.
+memory_slug() {
+    local LC_ALL=C p="$1" s
+    s="${p//[^A-Za-z0-9]/-}"
+    (( ${#s} <= 200 )) || s="${s:0:180}-$(printf '%s' "$p" | sha1sum | cut -c1-10)"
+    printf '%s' "$s"
+}
+_common="$(git -C "$PWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [[ "$(basename "${_common:-x}")" == .git ]]; then _mem_proj="$(readlink -f "$(dirname "$_common")")"; else _mem_proj="$PROJECT"; fi
+MEMORY_DIR="${HOME}/.local/share/pi-memory/$(memory_slug "$_mem_proj")"
+mkdir -p "$MEMORY_DIR" && chmod 700 "${HOME}/.local/share/pi-memory"
+args+=(--bind "$MEMORY_DIR" "$MEMORY_DIR")
+
 # pi's own state. The agent dir gets a throwaway overlay: pi can write and
 # lock its config freely in-session, but every write lands in a tmpfs that is
 # discarded at exit — so settings, trust, extensions, packages or system
@@ -233,7 +252,7 @@ for v in HOME USER LOGNAME SHELL PATH LANG LANGUAGE LC_ALL LC_CTYPE TERM \
          COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION TMUX TMUX_PANE EDITOR \
          VISUAL TZ DOCKER_HOST NO_COLOR PI_CODING_AGENT_DIR PI_LOCAL_READONLY PI_LOCAL_POLICY \
          PI_ADVISOR_SWAP_COOLDOWN_S PI_CLASSIFIER_DEADLINE_MS PI_ARBITER_URL \
-         PI_ARBITER_CTX; do
+         PI_ARBITER_CTX PI_CLAUDE_MEMORY; do
     [[ -n "${!v:-}" ]] && args+=(--setenv "$v" "${!v}")
 done
 args+=(
@@ -241,6 +260,7 @@ args+=(
     --setenv PI_CODE_DIR "$PI_CODE_DIR"
     --setenv PI_PROJECT_DIR "$([[ "$RW_PROJECT" == 1 ]] && echo "$PROJECT" || echo "none — read-only session")"
     --setenv PI_SECRETS_FD 3
+    --setenv PI_MEMORY_DIR "$MEMORY_DIR"
     --setenv PI_SKIP_VERSION_CHECK 1
     --setenv PI_TELEMETRY 0
     --chdir "$PWD"

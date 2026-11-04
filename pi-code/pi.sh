@@ -186,6 +186,11 @@ for f in .claude.json .netrc .git-credentials .npmrc .pypirc .bash_history \
          .mysql_history .lesshst .viminfo .dotfiles/.env; do
     hide_file "${HOME}/${f}"
 done
+# Claude Code chat transcripts come back read-only on top of the hidden
+# ~/.claude, so pi can read past sessions; the login token, settings and
+# everything else in there stay hidden.
+_cc_projects="$(readlink -f "${HOME}/.claude/projects" 2>/dev/null)"
+[[ -d "$_cc_projects" ]] && args+=(--ro-bind "$_cc_projects" "$_cc_projects")
 # Per-user runtime sockets (systemd user bus, gpg-agent, forwarded agents).
 hide_dir "/run/user/$(id -u)"
 

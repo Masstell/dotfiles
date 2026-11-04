@@ -75,6 +75,7 @@ extensions all run inside. The kernel enforces it; the model is never asked.
 | Rest of home, `/etc`, `/usr`, … | read-only |
 | `/mnt/raid` (all of tank the VM mounts) | read-only; `PI_RW=<path>` to opt in |
 | `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.docker`, `~/.kube`, gh/op/gcloud, Claude/Codex/Gemini/opencode credentials, `.env`, shell histories | hidden (empty) |
+| `~/.claude/projects` (Claude Code chat transcripts) | read-only; the rest of `~/.claude` stays hidden |
 | SSH agent, `/run/user/<uid>` sockets | unreachable |
 | Environment | rebuilt from an allowlist; no keys |
 | Keys | on fd 3 to pi only; `secrets.ts` closes it before any tool runs |

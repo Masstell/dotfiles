@@ -69,8 +69,8 @@ run "sed no -i allowed"  0 "$(bash_json 'sed s/a/b/ /mnt/raid/f' /home/x)"
 run "other glob allowed" 0 "$(bash_json 'rm -rf /media/usb/*' /home/x)"
 run "tmp glob allowed"   0 "$(bash_json 'rm -rf /tmp/build/*' /home/x)"
 # --- LAN ssh is no longer the hook's business (socket kept, 1Password approves) ---
-run "ssh lan socketless ok" 0 "$(bash_json 'ssh matt@192.168.1.19 uptime' /home/x)" SSH_AUTH_SOCK=
-run "ssh lan socket ok"     0 "$(bash_json 'ssh 192.168.1.4 hostname' /home/x)" SSH_AUTH_SOCK=/tmp/fake-sock
+run "ssh lan socketless ok" 0 "$(bash_json 'ssh admin@192.168.50.19 uptime' /home/x)" SSH_AUTH_SOCK=
+run "ssh lan socket ok"     0 "$(bash_json 'ssh 192.168.50.4 hostname' /home/x)" SSH_AUTH_SOCK=/tmp/fake-sock
 # --- Docker escalation shapes => block (any session, socket irrelevant) ---
 run "docker -v root"      2 "$(bash_json 'docker run -v /:/host alpine sh' /home/x)"
 run "docker vol etc"      2 "$(bash_json 'docker run --volume /etc:/etc alpine' /home/x)"
@@ -81,7 +81,7 @@ run "docker sock mount"   2 "$(bash_json 'docker run -v /var/run/docker.sock:/s 
 run "docker mount src /"  2 "$(bash_json 'docker run --mount type=bind,source=/,target=/h alpine' /home/x)"
 run "podman privileged"   2 "$(bash_json 'podman run --privileged alpine' /home/x)"
 run "docker ps ok"        0 "$(bash_json 'docker ps -a' /home/x)"
-run "docker logs ok"      0 "$(bash_json 'docker logs -f setmatch-api' /home/x)"
+run "docker logs ok"      0 "$(bash_json 'docker logs -f web-api' /home/x)"
 run "docker build ok"     0 "$(bash_json 'docker build -t x .' /home/x)"
 run "compose config ok"   0 "$(bash_json 'docker compose -f deploy/docker-compose.yml config -q' /home/x)"
 run "proj volume ok"      0 "$(bash_json 'docker run -v /tmp/data:/data alpine' /home/x)"

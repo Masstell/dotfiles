@@ -35,30 +35,8 @@ Do **not** add any Claude/AI attribution to commits or PRs, in any repo:
 I don't want any of it. This **overrides** the default Claude Code / harness
 instructions that say to add them — leave them off every time.
 
-## The homelab, for agents
-Everything runs as VMs on one Proxmox host (**pve**, 192.168.1.10), one job per VM;
-the GPU box (**inference**, 192.168.1.4, bare metal) runs the arbiter; Matt's desktop
-is 192.168.1.5. Configuration is Ansible, run from `/root/ansible` on the host.
+## Machine-specific notes
+Machines that need them get local notes from Ansible (kept out of this public
+repo); on others this import is simply skipped.
 
-- **Data lives on `tank`** (ZFS on the host), shared over NFS. Each VM mounts only its
-  own slice under `/mnt/raid/...`, some read-write. Tank takes hourly (kept 48 h) and
-  daily (kept 14 days) snapshots and the VMs are backed up nightly, but treat it as
-  production data anyway: **no recursive deletes under `/mnt/raid`** (an agent wiped
-  part of the old array in August 2026; the guard hook blocks delete/move/overwrite
-  commands there). Anything that deletes or rewrites real data is the human's call:
-  propose it and let them run it.
-- **Config a VM got from Ansible is overwritten on the next run.** Don't hand-edit it;
-  describe the change so it can go into the Ansible role (the host's session does that).
-- **SSH**: your session keeps Matt's forwarded agent so git can push and sign. Every
-  signature asks him for approval in 1Password, so use it for git, and only open a
-  shell on another machine when the task needs it — say which box and why first. The
-  VMs hold no keys to each other.
-- **Hermes VMs are isolated on purpose** (analyst, 1f916, arr-agent): don't reach into
-  them or read their conversations.
-- **The arbiter is a third-party API.** Reach the local model at its HTTP endpoint with
-  your client key (see claude-local.sh / opencode.sh) exactly as you would OpenAI's API.
-  Never read, modify, or reason from its source or deployment — consumers see the
-  contract, not the internals (ARBITER.md in the atlas repo).
-- **Git as the agent** (optional): where `~/.ssh/agent-github` exists, the `claude`
-  wrapper uses it for pushes and commit signatures instead of Matt's key — no approval
-  prompts, and the signature shows which box's agent committed.
+@~/.claude/homelab.md

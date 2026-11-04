@@ -25,7 +25,24 @@ import {
 
 const ON = /^(1|true|yes|on)$/i;
 const WEB_TOOLS = new Set(["web_fetch", "web_search"]);
-const WEB_BASH = /\b(curl|wget|aria2c|http|lynx|w3m)\b|git\s+(clone|fetch|pull)\b|https?:\/\//i;
+// Commands that bring outside text into the conversation: downloads, URLs,
+// GitHub issue/PR text, package installs (their output and scripts).
+const WEB_BASH = new RegExp(
+  [
+    String.raw`\b(curl|wget|aria2c|lynx|w3m|httpie)\b`,
+    String.raw`\bgit\s+clone\b`,
+    String.raw`https?://`,
+    String.raw`\bgh\s+(issue|pr|api|release|repo\s+view|search|gist)\b`,
+    String.raw`\b(pip3?|uv\s+pip|npm|pnpm|yarn|bun|cargo|go|gem)\s+(install|add|i|get)\b`,
+    String.raw`\b(urllib|requests\.get|httpx|fetch\()`,
+  ].join("|"),
+  "i",
+);
+// Path-shaped mentions of the memory folder (not prose about it).
+const MEM_PATH = /share\/pi-m|pi-mem[a-z*?]*\/|(^|[;&|\s])cd\s[^;&|]*pi-mem|\bPI_MEMORY/;
+// pi re-registers extensions on /reload, /new, /resume and /fork, after the
+// launcher's env values were already removed; keep them here.
+const STASH = Symbol.for("homelab.pi.memory");
 
 /** Resolve a tool path the way pi does (strip "@", file:// URLs, ~), then follow symlinks. */
 function resolveToolPath(p: string, cwd: string): string {
@@ -40,8 +57,9 @@ function resolveToolPath(p: string, cwd: string): string {
 }
 
 export default function registerMemory(pi: any, secrets: Secrets) {
-  const dir = memoryDir(process.cwd());
-  const readOnly = ON.test(process.env.PI_MEMORY_READONLY || "");
+  const g = globalThis as any;
+  g[STASH] ??= { dir: memoryDir(process.cwd()), readOnly: ON.test(process.env.PI_MEMORY_READONLY || "") };
+  const { dir, readOnly } = g[STASH] as { dir: string; readOnly: boolean };
   // Bash inherits pi's environment; nothing here should point it at memory.
   delete process.env.PI_MEMORY_DIR;
   delete process.env.PI_MEMORY_READONLY;
@@ -73,8 +91,11 @@ export default function registerMemory(pi: any, secrets: Secrets) {
     try { entries = ctx?.sessionManager?.getBranch?.() ?? []; } catch { return; }
     const byName = new Map(notes().notes.map((n) => [n.name, n]));
     for (const e of entries) {
+      // Recalls before the latest compaction were summarized away: recall again.
+      if (e?.type === "compaction") recalled = new Set();
       const m = e?.message;
       if (m?.role === "toolResult" && WEB_TOOLS.has(String(m.toolName))) webTainted = true;
+      if (m?.role === "bashExecution" && WEB_BASH.test(String(m.command || ""))) webTainted = true;
       if (m?.role === "assistant" && Array.isArray(m.content)) {
         for (const part of m.content) {
           if (part?.type === "toolCall" && part.name === "bash" && WEB_BASH.test(String(part.arguments?.command || ""))) webTainted = true;
@@ -91,8 +112,20 @@ export default function registerMemory(pi: any, secrets: Secrets) {
   };
 
   rebuild();
-  pi.on("session_start", async (_event: any, ctx: any) => { scanBranch(ctx); rebuild(); });
+  pi.on("session_start", async (_event: any, ctx: any) => {
+    scanBranch(ctx);
+    rebuild();
+    const bad = notes().ignored.filter((i) => /signature/.test(i));
+    if (bad.length) {
+      try { ctx?.ui?.notify?.(`🧠 ${bad.length} memory file(s) ignored: not saved through remember (/memories lists them)`, "warning"); } catch { /* headless */ }
+    }
+  });
   pi.on("session_compact", async () => { recalled = new Set(); rebuild(); });
+  // Your own `!cmd` runs land in the conversation too.
+  pi.on("user_bash", async (event: any) => {
+    if (!event?.excludeFromContext && WEB_BASH.test(String(event?.command || ""))) webTainted = true;
+    return undefined;
+  });
 
   // Memory changes only through remember/forget. The folder is writable for
   // this process, so shell and file tools are kept off it. (Unsigned files
@@ -104,14 +137,14 @@ export default function registerMemory(pi: any, secrets: Secrets) {
     if (tool === "bash") {
       const cmd = String(input.command || "");
       if (WEB_BASH.test(cmd)) webTainted = true;
-      if (/pi-mem|PI_MEMORY/.test(cmd) || cmd.includes(dir) || cmd.includes(realDir)) {
+      if (MEM_PATH.test(cmd) || cmd.includes(dir) || cmd.includes(realDir)) {
         return { block: true, reason: "Project memory changes only through the remember and forget tools; read notes with the read tool." };
       }
     } else if (!["read", "ls", "grep", "find", "remember", "forget"].includes(tool)) {
       const raw = String(input.path || input.file_path || "");
       if (raw) {
         const abs = resolveToolPath(raw, process.cwd());
-        if (/pi-mem/.test(raw) || abs === realDir || abs.startsWith(realDir + path.sep) || abs.startsWith(dir + path.sep)) {
+        if (MEM_PATH.test(raw) || abs === realDir || abs.startsWith(realDir + path.sep) || abs.startsWith(dir + path.sep)) {
           return { block: true, reason: "Project memory changes only through the remember and forget tools." };
         }
       }
@@ -215,7 +248,14 @@ export default function registerMemory(pi: any, secrets: Secrets) {
       const why = unavailable();
       if (why) return { content: [{ type: "text", text: `Not changed: ${why}` }], isError: true, details: {} };
       const name = String(params.name || "").trim();
-      if (!archiveNote(dir, name)) return { content: [{ type: "text", text: `No note named "${name}".` }], isError: true, details: {} };
+      if (!notes().notes.some((n) => n.name === name)) return { content: [{ type: "text", text: `No note named "${name}".` }], isError: true, details: {} };
+      if (webTainted) {
+        const ok = ctx?.hasUI
+          ? await ctx.ui.confirm("Forget a project memory note?", `This session has read web content, so pi asks first.\n\nForget "${name}"? (It is archived; /memories restore brings it back.)`)
+          : false;
+        if (!ok) return { content: [{ type: "text", text: "Not changed: the user did not approve forgetting in a session that has read web content." }], isError: true, details: {} };
+      }
+      archiveNote(dir, name, key);
       try { ctx?.ui?.notify?.(`🧠 forgot memory: ${name} (/memories restore ${name} undoes it)`, "info"); } catch { /* headless */ }
       return { content: [{ type: "text", text: `Forgot "${name}" (archived).` }], details: {} };
     },
@@ -247,10 +287,10 @@ export default function registerMemory(pi: any, secrets: Secrets) {
         }
         case "forget":
           if (readOnly) return say("Memory is read-only in this session.", "warning");
-          return valid && archiveNote(dir, arg) ? say(`Forgot "${arg}" (archived).`) : say(`No note named "${arg}".`, "warning");
+          return valid && archiveNote(dir, arg, key) ? say(`Forgot "${arg}" (archived).`) : say(`No note named "${arg}".`, "warning");
         case "restore":
           if (readOnly) return say("Memory is read-only in this session.", "warning");
-          return valid && restoreNote(dir, arg)
+          return valid && restoreNote(dir, arg, key)
             ? say(`Restored "${arg}". It joins the index next session.`)
             : say(`Nothing archived under "${arg}".`, "warning");
         case "claude": {

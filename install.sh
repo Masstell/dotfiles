@@ -120,6 +120,9 @@ if [ -n "$PI_VERSION" ] && command -v npm >/dev/null 2>&1; then
         # requests the arbiter would have served). Other settings are kept.
         # lastChangelogVersion: the sandbox discards pi's own settings writes,
         # so without this pi would show the changelog on every launch.
+        # defaultProjectTrust never: a project's own .pi/extensions would run
+        # inside pi's process (where the keys are); the agent can write those
+        # files, so project-local pi resources are never loaded.
         if command -v jq >/dev/null; then
             PI_SETTINGS=~/.pi/agent/settings.json
             [ -s "$PI_SETTINGS" ] || echo '{}' > "$PI_SETTINGS"
@@ -127,7 +130,8 @@ if [ -n "$PI_VERSION" ] && command -v npm >/dev/null 2>&1; then
             jq --arg v "$PI_VERSION" '.defaultProvider = (.defaultProvider // "arbiter")
                 | .defaultModel = (.defaultModel // "default")
                 | .httpIdleTimeoutMs = ([(.httpIdleTimeoutMs // 0), 900000] | max)
-                | .lastChangelogVersion = $v' \
+                | .lastChangelogVersion = $v
+                | .defaultProjectTrust = "never"' \
                 "$PI_SETTINGS" > "$tmp" && mv "$tmp" "$PI_SETTINGS" || rm -f "$tmp"
         fi
     fi

@@ -84,10 +84,20 @@ fi
 # fd 3 with the other keys, so nothing pi runs can read it or forge a note.
 MEMORY_KEY_FILE="${HOME}/.config/pi-agent/memory.key"
 if [[ ! -s "$MEMORY_KEY_FILE" ]]; then
-    mkdir -p "$(dirname "$MEMORY_KEY_FILE")" && chmod 700 "$(dirname "$MEMORY_KEY_FILE")"
-    (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$MEMORY_KEY_FILE")
+    [[ -d "${MEMORY_KEY_FILE%/*}" ]] || mkdir -m 700 -p "${MEMORY_KEY_FILE%/*}"
+    # noclobber: two first launches at once must not each write a key.
+    (umask 077; set -o noclobber
+     head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$MEMORY_KEY_FILE") 2>/dev/null || true
 fi
 KEYS+=$'\n'"PI_MEMORY_KEY=$(<"$MEMORY_KEY_FILE")"
+
+# Nothing inside may get code into pi's process, where the keys live:
+# - Node opens its inspector (a code-execution port) on SIGUSR1, which any
+#   process in the sandbox could send; --disable-sigusr1 turns that off.
+# - No core dumps (a dump holds pi's memory, keys included).
+export NODE_OPTIONS="--disable-sigusr1"
+ulimit -Sc 0 2>/dev/null || true
+ulimit -Hc 0 2>/dev/null || true
 
 # The extensions are what gate bash. They auto-load from the agent dir, so
 # make sure the link is there (a fresh PI_CODING_AGENT_DIR won't have it)
@@ -99,7 +109,7 @@ mkdir -p "${AGENT_DIR}/extensions"
 if [[ "${PI_NOSANDBOX:-}" == 1 ]]; then
     echo "pi: ⚠️  PI_NOSANDBOX=1 — running WITHOUT the sandbox; the classifier is the only guard." >&2
     PI_SECRETS_FD=3 PI_CODE_DIR="$PI_CODE_DIR" PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0 \
-        exec "$PI_BIN" "$@" 3<<<"$KEYS"
+        PI_MEMORY_READONLY=0 exec "$PI_BIN" "$@" 3<<<"$KEYS"
 fi
 
 if ! command -v bwrap >/dev/null 2>&1; then
@@ -205,6 +215,8 @@ _cc_projects="$(readlink -f "${HOME}/.claude/projects" 2>/dev/null)"
 [[ -d "$_cc_projects" ]] && args+=(--ro-bind "$_cc_projects" "$_cc_projects")
 # Per-user runtime sockets (systemd user bus, gpg-agent, forwarded agents).
 hide_dir "/run/user/$(id -u)"
+# Crash reports and core dumps of earlier processes (apport, systemd-coredump).
+for d in /var/crash /var/lib/apport/coredump /var/lib/systemd/coredump; do hide_dir "$d"; done
 
 # Project memory (extensions/memory.ts): only this project's folder under
 # ~/.local/share/pi-memory is writable, and only in a project session (a
@@ -275,6 +287,7 @@ args+=(
     --setenv PI_CODE_DIR "$PI_CODE_DIR"
     --setenv PI_PROJECT_DIR "$([[ "$RW_PROJECT" == 1 ]] && echo "$PROJECT" || echo "none — read-only session")"
     --setenv PI_SECRETS_FD 3
+    --setenv NODE_OPTIONS "--disable-sigusr1"
     --setenv PI_MEMORY_DIR "$MEMORY_DIR"
     --setenv PI_MEMORY_READONLY "$([[ "$RW_PROJECT" == 1 ]] && echo 0 || echo 1)"
     --setenv PI_SKIP_VERSION_CHECK 1

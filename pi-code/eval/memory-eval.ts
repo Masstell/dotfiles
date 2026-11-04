@@ -106,6 +106,7 @@ const rejects: [string, any, RegExp][] = [
   ["password in prose", { ...base, content: "the db password is hunter2hunter2" }, /password/],
   ["aws secret with slashes", { ...base, content: "aws_secret_access_key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" }, /token/],
   ["opaque base64 token", { ...base, content: "the bearer is Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3A" }, /token/],
+  ["lowercase random token", { ...base, content: "use k4j9x2m7q1w8e5r3t6y0u2i9o7p4a1s8d" }, /token/],
   ["hex key next to a secret word", { ...base, content: "api key: 3f786850e387550fdab836ed7e6dc881" }, /secret|credential/],
   ["near-duplicate of deploy note", { ...base, name: "staging-wireguard", description: "Deploys to staging fail unless the WireGuard tunnel is up", keywords: ["deploy", "staging", "wireguard", "vpn"] }, /deploy-needs-vpn/],
   ["reworded duplicate", { ...base, name: "deploy-needs-wg0-tunnel", description: "Staging deploys need the wg0 WireGuard tunnel up; a hang at ssh means it is down", keywords: ["wg0", "wireguard", "tunnel", "ssh", "hang"] }, /deploy-needs-vpn/],
@@ -127,6 +128,13 @@ const ordinary: [string, string][] = [
   ["uuid", "Session 550e8400-e29b-41d4-a716-446655440000 reproduced it."],
   ["url", "Docs: https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md"],
   ["pk- word", "Install pk-command-not-found-helper first."],
+  ["password storage location", "The password is stored in 1Password homelab vault."],
+  ["variable name assignment", "secret=ARBITER_KEY in the env file"],
+  ["sha after the word key", "after the key rotation in 3f786850e387550fdab836ed7e6dc881de23001b"],
+  ["host key fingerprint", "ssh host key fingerprint is 3f786850e387550fdab836ed7e6dc881de23001b"],
+  ["mixed-case path", "/home/Matt/Projects/SetMatch2/backend/api_v3/routes/UserProfile_2024"],
+  ["long CamelCase identifier", "Subclass ConfigurationManagerFactoryBuilderImpl2 for this."],
+  ["long snake identifier", "Run docker_compose_exec_api_alembic_upgrade_head_2026_11_04 from the Makefile."],
 ];
 for (const [label, text] of ordinary) {
   const s = secretIn(text);
@@ -146,10 +154,26 @@ writeNote(dir, { ...seed[2], source: "agent", updated: "2026-11-05T09:00:00.000Z
 check("update copies the previous version to archive/", fs.readdirSync(path.join(dir, "archive")).some((f) => f.startsWith("user-prefers-vim.")));
 check("updated note is live and signed", load().notes.find((n) => n.name === "user-prefers-vim")?.body.startsWith("Updated") === true);
 check("no temp files left behind", !fs.readdirSync(dir).some((f) => f.endsWith(".tmp")));
-check("archiveNote removes the live note", !!archiveNote(dir, "tests-need-redis") && !fs.existsSync(path.join(dir, "tests-need-redis.md")));
-check("restoreNote brings it back, still signed", restoreNote(dir, "tests-need-redis") && load().notes.some((n) => n.name === "tests-need-redis"));
+check("archiveNote removes the live note", !!archiveNote(dir, "tests-need-redis", KEY) && !fs.existsSync(path.join(dir, "tests-need-redis.md")));
+check("restoreNote brings it back, still signed", restoreNote(dir, "tests-need-redis", KEY) && load().notes.some((n) => n.name === "tests-need-redis"));
 check("archive is not loaded as notes", load().notes.length === seed.length);
-check("archive refuses path-like names", archiveNote(dir, "../../x") === undefined && !restoreNote(dir, "../x"));
+check("archive refuses path-like names", archiveNote(dir, "../../x", KEY) === undefined && !restoreNote(dir, "../x", KEY));
+
+// --- Replay: signatures are bound to the project and to live vs archived ---
+{
+  const archived = fs.readdirSync(path.join(dir, "archive")).filter((f) => f.startsWith("user-prefers-vim."));
+  const live = path.join(dir, "user-prefers-vim.md");
+  const saved = fs.readFileSync(live, "utf8");
+  fs.copyFileSync(path.join(dir, "archive", archived[0]), live);
+  check("an archived version copied over the live note is ignored", !load().notes.some((n) => n.name === "user-prefers-vim"));
+  fs.writeFileSync(live, saved);
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "memeval-other-"));
+  fs.copyFileSync(live, path.join(other, "user-prefers-vim.md"));
+  check("a note copied in from another project is ignored", loadNotes(other, KEY).notes.length === 0);
+  fs.rmSync(other, { recursive: true, force: true });
+  fs.writeFileSync(path.join(dir, "archive", "deploy-needs-vpn.9999-planted.md"), saved.replace(/user-prefers-vim/g, "deploy-needs-vpn"));
+  check("restore skips a planted archive file", restoreNote(dir, "deploy-needs-vpn", KEY) === false || load().notes.find((n) => n.name === "deploy-needs-vpn")?.description.startsWith("Deploys") === true);
+}
 
 // --- Index ---
 const idx = buildIndex(dir, load().notes);

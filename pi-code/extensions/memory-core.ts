@@ -93,13 +93,21 @@ function canonical(n: NoteFields): string {
   return JSON.stringify([n.name, n.description, n.keywords, n.type, n.source, n.updated, n.body.trim()]);
 }
 
-export function sign(n: NoteFields, key: string): string {
-  return createHmac("sha256", key).update(canonical(n)).digest("hex");
+/** A signature is bound to its project folder and to its state, so a note
+ *  can't be copied in from another project, and an archived version can't be
+ *  copied back over the live note (restore re-signs it). */
+export type Scope = "live" | "archive";
+function scopeOf(dir: string, scope: Scope): string {
+  return `${scope}:${path.basename(dir)}`;
 }
 
-function verify(n: NoteFields, sig: string, key: string): boolean {
+export function sign(n: NoteFields, key: string, dir: string, scope: Scope = "live"): string {
+  return createHmac("sha256", key).update(scopeOf(dir, scope)).update("\0").update(canonical(n)).digest("hex");
+}
+
+function verify(n: NoteFields, sig: string, key: string, dir: string, scope: Scope): boolean {
   if (!key || !/^[0-9a-f]{64}$/.test(sig)) return false;
-  const a = Buffer.from(sign(n, key), "hex");
+  const a = Buffer.from(sign(n, key, dir, scope), "hex");
   const b = Buffer.from(sig, "hex");
   return a.length === b.length && timingSafeEqual(a, b);
 }
@@ -132,7 +140,7 @@ function parse(text: string, file: string): Parsed | undefined {
   };
 }
 
-export function formatNote(n: NoteFields, key: string): string {
+export function formatNote(n: NoteFields, key: string, dir: string, scope: Scope = "live"): string {
   return [
     "---",
     `name: ${n.name}`,
@@ -141,7 +149,7 @@ export function formatNote(n: NoteFields, key: string): string {
     `type: ${n.type}`,
     `source: ${n.source}`,
     `updated: ${n.updated}`,
-    `sig: ${sign(n, key)}`,
+    `sig: ${sign(n, key, dir, scope)}`,
     "---",
     n.body.trim(),
     "",
@@ -162,7 +170,7 @@ export function loadNotes(dir: string, key: string): { notes: Note[]; ignored: s
       const p = parse(fs.readFileSync(file, "utf8"), file);
       if (!p) { ignored.push(`${f} (malformed)`); continue; }
       if (p.fields.name !== path.basename(f, ".md") || !NAME_RE.test(p.fields.name)) { ignored.push(`${f} (name mismatch)`); continue; }
-      if (!verify(p.fields, p.sig, key)) { ignored.push(`${f} (not saved by remember: bad or missing signature)`); continue; }
+      if (!verify(p.fields, p.sig, key, dir, "live")) { ignored.push(`${f} (not saved by remember: bad or missing signature)`); continue; }
       notes.push({ ...p.fields, file });
     } catch { ignored.push(`${f} (unreadable)`); }
   }
@@ -174,43 +182,68 @@ function stamp(): string {
   return `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(3).toString("hex")}`;
 }
 
-/** Move a note into archive/ (forget). */
-export function archiveNote(dir: string, name: string): string | undefined {
-  if (!NAME_RE.test(name)) return undefined;
-  const src = path.join(dir, `${name}.md`);
-  if (!fs.existsSync(src)) return undefined;
+/** Read and verify one note file under the given scope. */
+function readSigned(file: string, key: string, dir: string, scope: Scope): NoteFields | undefined {
+  try {
+    const st = fs.lstatSync(file);
+    if (!st.isFile() || st.size > 64_000) return undefined;
+    const p = parse(fs.readFileSync(file, "utf8"), file);
+    return p && NAME_RE.test(p.fields.name) && verify(p.fields, p.sig, key, dir, scope) ? p.fields : undefined;
+  } catch { return undefined; }
+}
+
+function atomicWrite(dest: string, text: string): void {
+  const tmp = path.join(path.dirname(dest), `.${path.basename(dest)}.${randomBytes(6).toString("hex")}.tmp`);
+  fs.writeFileSync(tmp, text, { mode: 0o600, flag: "wx" });
+  fs.renameSync(tmp, dest);
+}
+
+/** Store a verified live note as an archived version (re-signed for archive). */
+function toArchive(dir: string, n: NoteFields, key: string): string {
   const adir = path.join(dir, "archive");
   fs.mkdirSync(adir, { recursive: true });
-  const dest = path.join(adir, `${name}.${stamp()}.md`);
-  fs.renameSync(src, dest);
+  const dest = path.join(adir, `${n.name}.${stamp()}.md`);
+  atomicWrite(dest, formatNote(n, key, dir, "archive"));
   return dest;
 }
 
-/** Bring back the newest archived version of a note. */
-export function restoreNote(dir: string, name: string): boolean {
+/** Move a note into archive/ (forget). */
+export function archiveNote(dir: string, name: string, key: string): string | undefined {
+  if (!NAME_RE.test(name)) return undefined;
+  const src = path.join(dir, `${name}.md`);
+  if (!fs.existsSync(src)) return undefined;
+  const n = readSigned(src, key, dir, "live");
+  const dest = n ? toArchive(dir, n, key) : undefined; // an unsigned file is just removed from view
+  fs.rmSync(src, { force: true });
+  return dest ?? src;
+}
+
+/** Bring back the newest valid archived version of a note. */
+export function restoreNote(dir: string, name: string, key: string): boolean {
   if (!NAME_RE.test(name)) return false;
   const adir = path.join(dir, "archive");
   let cands: string[] = [];
-  try { cands = fs.readdirSync(adir).filter((f) => f.startsWith(`${name}.`) && f.endsWith(".md")).sort(); } catch { return false; }
-  if (!cands.length) return false;
-  const dest = path.join(dir, `${name}.md`);
-  if (fs.existsSync(dest)) archiveNote(dir, name);
-  fs.renameSync(path.join(adir, cands[cands.length - 1]), dest);
-  return true;
+  try { cands = fs.readdirSync(adir).filter((f) => f.startsWith(`${name}.`) && f.endsWith(".md")).sort().reverse(); } catch { return false; }
+  for (const f of cands) {
+    const n = readSigned(path.join(adir, f), key, dir, "archive");
+    if (!n || n.name !== name) continue;
+    const dest = path.join(dir, `${name}.md`);
+    const cur = fs.existsSync(dest) ? readSigned(dest, key, dir, "live") : undefined;
+    if (cur) toArchive(dir, cur, key);
+    atomicWrite(dest, formatNote(n, key, dir, "live"));
+    fs.rmSync(path.join(adir, f), { force: true });
+    return true;
+  }
+  return false;
 }
 
-/** Write a note atomically; an existing version is copied to archive/ first. */
+/** Write a note atomically; the current version (if valid) is archived first. */
 export function writeNote(dir: string, n: NoteFields, key: string): string {
   fs.mkdirSync(dir, { recursive: true });
   const dest = path.join(dir, `${n.name}.md`);
-  const tmp = path.join(dir, `.${n.name}.${randomBytes(6).toString("hex")}.tmp`);
-  fs.writeFileSync(tmp, formatNote(n, key), { mode: 0o600, flag: "wx" });
-  if (fs.existsSync(dest)) {
-    const adir = path.join(dir, "archive");
-    fs.mkdirSync(adir, { recursive: true });
-    fs.copyFileSync(dest, path.join(adir, `${n.name}.${stamp()}.md`));
-  }
-  fs.renameSync(tmp, dest); // atomic replace: readers see the old note or the new one
+  const cur = fs.existsSync(dest) ? readSigned(dest, key, dir, "live") : undefined;
+  if (cur) toArchive(dir, cur, key);
+  atomicWrite(dest, formatNote(n, key, dir, "live")); // readers see the old note or the new one
   return dest;
 }
 
@@ -343,19 +376,28 @@ const SECRET_PATTERNS: [RegExp, string][] = [
   [/\bxox[abposr]-[A-Za-z0-9-]{10,}/, "a Slack token"],
   [/\bAKIA[0-9A-Z]{16}\b/, "an AWS access key"],
   [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, "a JWT"],
-  // Hex only counts next to a secret word: bare hex is usually a commit or digest.
-  [/\b(key|secret|token|password|passwd|bearer)\b[^\n]{0,24}?\b[A-Fa-f0-9]{32,}\b/i, "a hex secret"],
-  // An assignment whose value is a literal, not a reference (op://, a path, $VAR, {{ var }}, <placeholder>).
-  [/\b(password|passwd|passphrase|secret|api[_-]?key|token)\s*[:=]\s*(?!op:\/\/|[/~$<{]|vault\b|env\b)[^\s"'`]{8,}/i, "a credential assignment"],
-  [/\bpassword\s+(?:is|was)\s+\S{6,}/i, "a password"],
+  // Hex only counts directly after a secret word: bare hex is usually a commit or digest.
+  [/\b(key|secret|token|password|passwd|bearer)\b\s*[:=]?\s*["']?[A-Fa-f0-9]{32,}\b/i, "a hex secret"],
+  // An assignment whose value is a literal, not a reference (op://, a path, $VAR,
+  // {{ var }}, <placeholder>, an ALL_CAPS variable name).
+  [/\b(password|passwd|passphrase|secret|api[_-]?key|token)\s*[:=]\s*(?!op:\/\/|[/~$<{]|vault\b|env\b|[A-Z][A-Z0-9_]*(?![^\s"'`,;]))[^\s"'`]{8,}/i, "a credential assignment"],
+  [/\bpassword\s+(?:is|was)\s+(?!(?:stored|kept|saved|managed|in|at|from|the|a|an|set|rotated|changed)\b)\S{6,}/i, "a password"],
 ];
 
 export function secretIn(text: string): string | undefined {
   for (const [re, what] of SECRET_PATTERNS) if (re.test(text)) return what;
-  // Random-looking tokens: long, mixed case plus digits, and high entropy.
-  // Paths, commit SHAs, digests and long identifiers stay below 4.5 bits/char.
+  // Random-looking tokens: long and close to the entropy a random string of
+  // that length would have. Paths (with lowercase word segments), commit
+  // SHAs, digests and long identifiers fall well short.
   for (const tok of text.match(/[A-Za-z0-9+/=_]{32,}/g) || []) {
-    if (/[A-Z]/.test(tok) && /[a-z]/.test(tok) && /[0-9]/.test(tok) && entropy(tok) >= 4.5) return "a long random token";
+    if (tok.includes("/") && tok.split("/").some((seg) => /^[a-z]{3,}$/.test(seg))) continue; // a path
+    const need = Math.log2(tok.length) - 0.7;
+    const mixed = /[A-Z]/.test(tok) && /[a-z]/.test(tok) && /[0-9]/.test(tok);
+    const lowerAlnum = !/[A-Z]/.test(tok) && /[a-z]/.test(tok) && /[0-9]/.test(tok) && /[g-z]/.test(tok); // not plain hex
+    // Caps measured: random base62/base36 tokens of 32-64 chars are caught 95-100%;
+    // long CamelCase / snake_case identifiers peak around 4.25.
+    if ((mixed && entropy(tok) >= Math.min(need, 4.4)) || (lowerAlnum && entropy(tok) >= Math.min(need - 0.4, 4.2)))
+      return "a long random token";
   }
   return undefined;
 }

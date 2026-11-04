@@ -79,6 +79,15 @@ if [[ -z "$(sed -n 's/^PI_ARBITER_KEY=//p' <<<"$KEYS")" ]]; then
     echo "pi: no arbiter key. Set PI_ARBITER_KEY in ~/.config/pi-agent/env (Ansible) or ~/.dotfiles/.env." >&2
     exit 1
 fi
+# Project memory is signed with a per-user key (extensions/memory-core.ts).
+# It lives in ~/.config/pi-agent, which the sandbox hides, and reaches pi on
+# fd 3 with the other keys, so nothing pi runs can read it or forge a note.
+MEMORY_KEY_FILE="${HOME}/.config/pi-agent/memory.key"
+if [[ ! -s "$MEMORY_KEY_FILE" ]]; then
+    mkdir -p "$(dirname "$MEMORY_KEY_FILE")" && chmod 700 "$(dirname "$MEMORY_KEY_FILE")"
+    (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$MEMORY_KEY_FILE")
+fi
+KEYS+=$'\n'"PI_MEMORY_KEY=$(<"$MEMORY_KEY_FILE")"
 
 # The extensions are what gate bash. They auto-load from the agent dir, so
 # make sure the link is there (a fresh PI_CODING_AGENT_DIR won't have it)
@@ -198,9 +207,11 @@ _cc_projects="$(readlink -f "${HOME}/.claude/projects" 2>/dev/null)"
 hide_dir "/run/user/$(id -u)"
 
 # Project memory (extensions/memory.ts): only this project's folder under
-# ~/.local/share/pi-memory is writable. The project is the git root shared by
-# worktrees, else $PROJECT; the slug matches memory-core.ts. Claude Code's
-# guard hook keeps Claude out of ~/.local/share/pi-memory.
+# ~/.local/share/pi-memory is writable, and only in a project session (a
+# read-only session gets it read-only). The project is the git root shared by
+# worktrees, else $PROJECT; the slug (per byte, hence LC_ALL=C) matches
+# memory-core.ts. Notes are signed, so a file written here by anything but
+# remember is ignored. Claude Code's guard hook keeps Claude out.
 memory_slug() {
     local LC_ALL=C p="$1" s
     s="${p//[^A-Za-z0-9]/-}"
@@ -211,7 +222,11 @@ _common="$(git -C "$PWD" rev-parse --path-format=absolute --git-common-dir 2>/de
 if [[ "$(basename "${_common:-x}")" == .git ]]; then _mem_proj="$(readlink -f "$(dirname "$_common")")"; else _mem_proj="$PROJECT"; fi
 MEMORY_DIR="${HOME}/.local/share/pi-memory/$(memory_slug "$_mem_proj")"
 mkdir -p "$MEMORY_DIR" && chmod 700 "${HOME}/.local/share/pi-memory"
-args+=(--bind "$MEMORY_DIR" "$MEMORY_DIR")
+if [[ "$RW_PROJECT" == 1 ]]; then
+    args+=(--bind "$MEMORY_DIR" "$MEMORY_DIR")
+else
+    args+=(--ro-bind "$MEMORY_DIR" "$MEMORY_DIR")
+fi
 
 # pi's own state. The agent dir gets a throwaway overlay: pi can write and
 # lock its config freely in-session, but every write lands in a tmpfs that is
@@ -261,6 +276,7 @@ args+=(
     --setenv PI_PROJECT_DIR "$([[ "$RW_PROJECT" == 1 ]] && echo "$PROJECT" || echo "none — read-only session")"
     --setenv PI_SECRETS_FD 3
     --setenv PI_MEMORY_DIR "$MEMORY_DIR"
+    --setenv PI_MEMORY_READONLY "$([[ "$RW_PROJECT" == 1 ]] && echo 0 || echo 1)"
     --setenv PI_SKIP_VERSION_CHECK 1
     --setenv PI_TELEMETRY 0
     --chdir "$PWD"

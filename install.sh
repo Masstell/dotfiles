@@ -181,7 +181,7 @@ if command -v jq >/dev/null; then
           + [
               {matcher: "Bash", hooks: [{type: "command", command: $guard}]},
               {matcher: "Write|Edit|MultiEdit|NotebookEdit", hooks: [{type: "command", command: $guard}]},
-              {matcher: "Read|Grep|Glob|NotebookRead", hooks: [{type: "command", command: $guard}]}
+              {matcher: "Read|Grep|Glob", hooks: [{type: "command", command: $guard}]}
             ]
         )
     ' "$SETTINGS" > "$tmp"

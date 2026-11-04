@@ -2,9 +2,14 @@
 // session, keyword recall per user message, and /memories. Logic lives in
 // memory-core.ts; this file is the pi glue.
 //
-// Poisoning guard: memory outlives the session, so one bad write keeps
-// steering later ones. Every save is shown to the user, and a save in a run
-// that read the web (web_fetch / web_search) asks the user first.
+// Poisoning guards: memory outlives the session, so one bad write keeps
+// steering later ones.
+// - Only remember writes notes that count: each is signed with a key pi gets
+//   on fd 3 (PI_MEMORY_KEY), and unsigned or altered files are ignored.
+// - Every save is shown to the user. Once the session has taken in web
+//   content (web_fetch, web_search, curl/wget/git clone in bash), every
+//   further save asks the user first; headless runs refuse.
+// - In a read-only session (pi started outside a project) memory is read-only.
 //
 // Claude Code's memory for the project can be shown read-only (its index
 // only) with PI_CLAUDE_MEMORY=1 or `/memories claude on`. pi never writes it.
@@ -12,21 +17,42 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Type } from "typebox";
+import type { Secrets } from "./secrets.ts";
 import {
-  LIMITS, TYPES, archiveNote, buildIndex, checkCandidate, claudeMemoryDir, loadNotes, memoryDir,
-  recall, recallMessage, restoreNote, writeNote,
+  LIMITS, NAME_RE, TYPES, archiveNote, buildIndex, checkCandidate, claudeMemoryDir, loadNotes, memoryDir,
+  recall, recallKey, recallMessage, restoreNote, writeNote,
 } from "./memory-core.ts";
 
 const ON = /^(1|true|yes|on)$/i;
 const WEB_TOOLS = new Set(["web_fetch", "web_search"]);
+const WEB_BASH = /\b(curl|wget|aria2c|http|lynx|w3m)\b|git\s+(clone|fetch|pull)\b|https?:\/\//i;
 
-export default function registerMemory(pi: any) {
+/** Resolve a tool path the way pi does (strip "@", file:// URLs, ~), then follow symlinks. */
+function resolveToolPath(p: string, cwd: string): string {
+  let s = p.trim().replace(/[  -​  　]/g, " ");
+  if (s.startsWith("@")) s = s.slice(1);
+  if (/^file:\/\//i.test(s)) { try { s = decodeURIComponent(new URL(s).pathname); } catch { /* keep */ } }
+  s = s.replace(/^~(?=\/|$)/, process.env.HOME || "~");
+  let abs = path.resolve(cwd, s);
+  try { return fs.realpathSync(abs); } catch { /* new file */ }
+  try { abs = path.join(fs.realpathSync(path.dirname(abs)), path.basename(abs)); } catch { /* new dir */ }
+  return abs;
+}
+
+export default function registerMemory(pi: any, secrets: Secrets) {
   const dir = memoryDir(process.cwd());
+  const readOnly = ON.test(process.env.PI_MEMORY_READONLY || "");
+  // Bash inherits pi's environment; nothing here should point it at memory.
+  delete process.env.PI_MEMORY_DIR;
+  delete process.env.PI_MEMORY_READONLY;
+  const key = secrets.memoryKey;
+  const realDir = (() => { try { return fs.realpathSync(dir); } catch { return dir; } })();
   let claudeOn = ON.test(process.env.PI_CLAUDE_MEMORY || "");
-  let snapshot = "";                  // the index section, rebuilt only at session start / compaction / toggle
-  let recalled = new Set<string>();   // name@updated already injected this session
-  let webThisRun = false;
+  let snapshot = "";                 // the index section; rebuilt at session start / compaction / toggle
+  let recalled = new Set<string>();  // note versions already injected this session
+  let webTainted = false;            // the session has taken in web content
 
+  const notes = () => loadNotes(dir, key);
   const rebuild = () => {
     let claude: { dir: string; index: string } | undefined;
     if (claudeOn) {
@@ -35,32 +61,57 @@ export default function registerMemory(pi: any) {
         try { claude = { dir: cdir, index: fs.readFileSync(path.join(cdir, "MEMORY.md"), "utf8") }; } catch { /* unreadable */ }
       }
     }
-    snapshot = buildIndex(dir, loadNotes(dir), claude);
+    snapshot = key ? buildIndex(dir, notes().notes, claude) : buildIndex(dir, [], claude);
   };
+
+  // Rebuild what this session already contains: web content in its history,
+  // and notes already recalled into it (so a resumed session isn't re-fed).
+  const scanBranch = (ctx: any) => {
+    webTainted = false;
+    recalled = new Set();
+    let entries: any[] = [];
+    try { entries = ctx?.sessionManager?.getBranch?.() ?? []; } catch { return; }
+    const byName = new Map(notes().notes.map((n) => [n.name, n]));
+    for (const e of entries) {
+      const m = e?.message;
+      if (m?.role === "toolResult" && WEB_TOOLS.has(String(m.toolName))) webTainted = true;
+      if (m?.role === "assistant" && Array.isArray(m.content)) {
+        for (const part of m.content) {
+          if (part?.type === "toolCall" && part.name === "bash" && WEB_BASH.test(String(part.arguments?.command || ""))) webTainted = true;
+          if (part?.type === "toolCall" && WEB_TOOLS.has(String(part.name))) webTainted = true;
+        }
+      }
+      if (e?.customType === "memory-recall" || m?.customType === "memory-recall") {
+        for (const name of (e?.details?.names || m?.details?.names || []) as string[]) {
+          const n = byName.get(name);
+          if (n) recalled.add(recallKey(n));
+        }
+      }
+    }
+  };
+
   rebuild();
+  pi.on("session_start", async (_event: any, ctx: any) => { scanBranch(ctx); rebuild(); });
+  pi.on("session_compact", async () => { recalled = new Set(); rebuild(); });
 
-  pi.on("session_start", async () => { recalled = new Set(); rebuild(); });
-  pi.on("session_compact", async () => { rebuild(); });
-
-  // Memory changes only through remember/forget, where the checks and the
-  // user-visible notices live. The directory itself is writable (it has to
-  // be, for this process), so shell and file tools are kept off it.
-  const realDir = (() => { try { return fs.realpathSync(dir); } catch { return dir; } })();
+  // Memory changes only through remember/forget. The folder is writable for
+  // this process, so shell and file tools are kept off it. (Unsigned files
+  // are ignored anyway; this stops deletes and clutter.)
   pi.on("tool_call", async (event: any) => {
     const tool = String(event?.toolName || "");
-    if (WEB_TOOLS.has(tool)) webThisRun = true;
     const input = event?.input || {};
+    if (WEB_TOOLS.has(tool)) webTainted = true;
     if (tool === "bash") {
       const cmd = String(input.command || "");
-      if (/pi-memory/.test(cmd) || cmd.includes(dir) || cmd.includes(realDir)) {
+      if (WEB_BASH.test(cmd)) webTainted = true;
+      if (/pi-mem|PI_MEMORY/.test(cmd) || cmd.includes(dir) || cmd.includes(realDir)) {
         return { block: true, reason: "Project memory changes only through the remember and forget tools; read notes with the read tool." };
       }
     } else if (!["read", "ls", "grep", "find", "remember", "forget"].includes(tool)) {
-      const p = String(input.path || input.file_path || "");
-      if (p) {
-        let abs = path.resolve(process.cwd(), p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
-        try { abs = fs.realpathSync(path.dirname(abs)) + path.sep + path.basename(abs); } catch { /* new path */ }
-        if (abs.startsWith(realDir + path.sep) || abs.startsWith(dir + path.sep)) {
+      const raw = String(input.path || input.file_path || "");
+      if (raw) {
+        const abs = resolveToolPath(raw, process.cwd());
+        if (/pi-mem/.test(raw) || abs === realDir || abs.startsWith(realDir + path.sep) || abs.startsWith(dir + path.sep)) {
           return { block: true, reason: "Project memory changes only through the remember and forget tools." };
         }
       }
@@ -76,14 +127,22 @@ export default function registerMemory(pi: any) {
       if (snapshot) sections.memory = snapshot;
       else delete sections.memory;
     }
-    if (event?.messageType !== "user") return undefined;
-    webThisRun = false;
-    const hits = recall(String(event.prompt || ""), loadNotes(dir), recalled);
+    if (event?.messageType !== "user" || !key) return undefined;
+    const hits = recall(String(event.prompt || ""), notes().notes, recalled);
     if (!hits.length) return undefined;
-    for (const h of hits) recalled.add(`${h.note.name}@${h.note.updated}`);
+    for (const h of hits) recalled.add(recallKey(h.note));
     try { ctx?.ui?.notify?.(`🧠 recalled: ${hits.map((h) => h.note.name).join(", ")}`, "info"); } catch { /* headless */ }
-    return { message: { customType: "memory-recall", content: recallMessage(hits), display: false } };
+    return {
+      message: {
+        customType: "memory-recall", content: recallMessage(hits), display: false,
+        details: { names: hits.map((h) => h.note.name) },
+      },
+    };
   });
+
+  const unavailable = () =>
+    !key ? "project memory is unavailable (no memory key: pi.sh creates one in ~/.config/pi-agent/memory.key)."
+      : readOnly ? "project memory is read-only in this session (pi was started outside a project)." : "";
 
   pi.registerTool({
     name: "remember",
@@ -103,11 +162,14 @@ export default function registerMemory(pi: any) {
     parameters: Type.Object({
       name: Type.String({ description: "kebab-case id, e.g. deploy-needs-vpn" }),
       description: Type.String({ description: "One line: what this note is about (used for recall)" }),
-      keywords: Type.Optional(Type.Array(Type.String(), { description: "Up to 8 search terms, including synonyms" })),
+      keywords: Type.Optional(Type.Array(Type.String(), { description: "Up to 8 short lowercase search terms, including synonyms" })),
       type: Type.String({ description: `One of: ${TYPES.join(", ")}` }),
       content: Type.String({ description: `The note itself, under ${LIMITS.bodyChars} characters. Include the why.` }),
     }),
     async execute(_id: string, params: any, _signal: AbortSignal, _onUpdate: any, ctx: any) {
+      const fail = (text: string) => ({ content: [{ type: "text", text: `Not saved: ${text}` }], isError: true, details: { saved: false } });
+      const why = unavailable();
+      if (why) return fail(why);
       const cand = {
         name: String(params.name || "").trim(),
         description: String(params.description || "").trim(),
@@ -115,30 +177,26 @@ export default function registerMemory(pi: any) {
         type: String(params.type || "").trim(),
         content: String(params.content || ""),
       };
-      const notes = loadNotes(dir);
-      const err = checkCandidate(cand, notes);
-      if (err) return { content: [{ type: "text", text: `Not saved: ${err}` }], isError: true, details: { saved: false } };
+      const current = notes().notes;
+      const err = checkCandidate(cand, current);
+      if (err) return fail(err);
 
-      if (webThisRun) {
+      if (webTainted) {
         const ok = ctx?.hasUI
           ? await ctx.ui.confirm(
               "Save to project memory?",
-              `This run read the web, so pi asks before remembering.\n\n${cand.name}: ${cand.description}\n\n${cand.content.slice(0, 1200)}`,
+              "This session has read web content, so pi asks before remembering.\n\n" +
+                `${cand.name}: ${cand.description}\nkeywords: ${cand.keywords.join(", ") || "(none)"}\n\n${cand.content.slice(0, 1200)}`,
             )
           : false;
-        if (!ok) {
-          return {
-            content: [{ type: "text", text: "Not saved: the user did not approve saving memory in a run that read web content." }],
-            isError: true, details: { saved: false },
-          };
-        }
+        if (!ok) return fail("the user did not approve saving memory in a session that has read web content.");
       }
 
-      const updating = notes.some((n) => n.name === cand.name);
+      const updating = current.some((n) => n.name === cand.name);
       writeNote(dir, {
         name: cand.name, description: cand.description, keywords: cand.keywords, type: cand.type,
-        source: webThisRun ? "agent+web" : "agent", updated: new Date().toISOString().slice(0, 10), body: cand.content,
-      });
+        source: webTainted ? "agent+web" : "agent", updated: new Date().toISOString(), body: cand.content,
+      }, key);
       try { ctx?.ui?.notify?.(`🧠 ${updating ? "updated" : "saved"} memory: ${cand.name} — ${cand.description}`, "info"); } catch { /* headless */ }
       return {
         content: [{ type: "text", text: `${updating ? "Updated" : "Saved"} "${cand.name}". It is recallable now and joins the index next session.` }],
@@ -154,10 +212,10 @@ export default function registerMemory(pi: any) {
     promptSnippet: "Remove an outdated or wrong note from project memory",
     parameters: Type.Object({ name: Type.String({ description: "The note's name" }) }),
     async execute(_id: string, params: any, _signal: AbortSignal, _onUpdate: any, ctx: any) {
+      const why = unavailable();
+      if (why) return { content: [{ type: "text", text: `Not changed: ${why}` }], isError: true, details: {} };
       const name = String(params.name || "").trim();
-      if (!/^[a-z0-9][a-z0-9-]{0,59}$/.test(name) || !archiveNote(dir, name)) {
-        return { content: [{ type: "text", text: `No note named "${name}".` }], isError: true, details: {} };
-      }
+      if (!archiveNote(dir, name)) return { content: [{ type: "text", text: `No note named "${name}".` }], isError: true, details: {} };
       try { ctx?.ui?.notify?.(`🧠 forgot memory: ${name} (/memories restore ${name} undoes it)`, "info"); } catch { /* headless */ }
       return { content: [{ type: "text", text: `Forgot "${name}" (archived).` }], details: {} };
     },
@@ -168,25 +226,31 @@ export default function registerMemory(pi: any) {
     handler: async (args: string, ctx: any) => {
       const [sub = "", arg = ""] = (args || "").trim().split(/\s+/, 2);
       const say = (t: string, level = "info") => ctx.ui.notify(t, level);
-      const notes = loadNotes(dir);
+      const { notes: list, ignored } = notes();
+      const valid = NAME_RE.test(arg);
       switch (sub) {
         case "":
         case "list": {
-          if (!notes.length) return say(`No notes yet for this project.\n${dir}`);
-          return say(
-            `${notes.length} note(s) in ${dir}\n` +
-            notes.map((n) => `  ${n.name} — ${n.description} (${n.type}, ${n.updated}${n.source !== "agent" ? `, ${n.source}` : ""})`).join("\n") +
-            `\nClaude memory: ${claudeOn ? "on" : "off"}`,
-          );
+          const lines = [
+            list.length ? `${list.length} note(s) in ${dir}` : `No notes yet for this project.\n${dir}`,
+            ...list.map((n) => `  ${n.name} — ${n.description} (${n.type}, ${n.updated.slice(0, 10)}${n.source !== "agent" ? `, ${n.source}` : ""})`),
+          ];
+          if (ignored.length) lines.push(`Ignored (not saved through remember): ${ignored.join("; ")}`);
+          if (!key) lines.push("Memory key missing: notes can't be verified or saved.");
+          if (readOnly) lines.push("Read-only in this session.");
+          lines.push(`Claude memory: ${claudeOn ? "on" : "off"}`);
+          return say(lines.join("\n"));
         }
         case "show": {
-          const n = notes.find((x) => x.name === arg);
+          const n = list.find((x) => x.name === arg);
           return n ? say(fs.readFileSync(n.file, "utf8")) : say(`No note named "${arg}".`, "warning");
         }
         case "forget":
-          return archiveNote(dir, arg) ? say(`Forgot "${arg}" (archived).`) : say(`No note named "${arg}".`, "warning");
+          if (readOnly) return say("Memory is read-only in this session.", "warning");
+          return valid && archiveNote(dir, arg) ? say(`Forgot "${arg}" (archived).`) : say(`No note named "${arg}".`, "warning");
         case "restore":
-          return /^[a-z0-9][a-z0-9-]{0,59}$/.test(arg) && restoreNote(dir, arg)
+          if (readOnly) return say("Memory is read-only in this session.", "warning");
+          return valid && restoreNote(dir, arg)
             ? say(`Restored "${arg}". It joins the index next session.`)
             : say(`Nothing archived under "${arg}".`, "warning");
         case "claude": {

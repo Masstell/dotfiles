@@ -89,18 +89,21 @@ export default function registerPlanMode(pi: any) {
   const show = (ctx: any) => {
     try { ctx?.ui?.setStatus?.("plan-mode", state.on ? "⏸ plan" : undefined); } catch { /* headless */ }
   };
+  // State lives on globalThis, so it survives /reload, /new and /resume in
+  // this process; apply() only acts on a real change.
   const apply = (on: boolean, ctx: any, persist = true) => {
-    if (on === state.on && persist) return;
-    state.on = on;
     if (on) {
-      state.toolsBefore = pi.getActiveTools();
-      pi.setActiveTools(state.toolsBefore!.filter((t: string) => !WRITE_TOOLS.has(t)));
-    } else {
-      const before = state.toolsBefore ?? pi.getActiveTools();
+      if (!state.on) state.toolsBefore = pi.getActiveTools();
+      pi.setActiveTools(pi.getActiveTools().filter((t: string) => !WRITE_TOOLS.has(t)));
+    } else if (state.on) {
+      const all = new Set((pi.getAllTools?.() ?? []).map((t: any) => t?.name));
+      const before: string[] = state.toolsBefore ?? [...pi.getActiveTools(), ...[...WRITE_TOOLS].filter((t) => all.has(t))];
       pi.setActiveTools([...new Set([...before, ...pi.getActiveTools()])]);
       state.toolsBefore = undefined;
     }
-    if (persist) pi.appendEntry("plan-mode", { on });
+    const changed = state.on !== on;
+    state.on = on;
+    if (persist && changed) pi.appendEntry("plan-mode", { on });
     show(ctx);
   };
 
@@ -120,10 +123,7 @@ export default function registerPlanMode(pi: any) {
       }
     } catch { /* no history */ }
     if (pi.getFlag?.("plan") && !process.env.PI_SUBAGENT) on = true;
-    state.on = false;
-    state.toolsBefore = undefined;
-    if (on) apply(true, ctx, false);
-    show(ctx);
+    apply(on, ctx, false);
   });
 
   // A subagent worker started while the main session is in plan mode.
@@ -150,6 +150,7 @@ export default function registerPlanMode(pi: any) {
     if (state.on) return undefined;
     const messages = event?.messages;
     if (!Array.isArray(messages)) return undefined;
+    if (!messages.some((m: any) => m?.customType === "plan-mode-context")) return undefined; // keep the prompt cache
     return { messages: messages.filter((m: any) => m?.customType !== "plan-mode-context") };
   });
 
@@ -157,11 +158,15 @@ export default function registerPlanMode(pi: any) {
     if (!state.on || !ctx?.hasUI) return;
     const last = [...(event?.messages || [])].reverse().find((m: any) => m?.role === "assistant");
     const text = Array.isArray(last?.content) ? last.content.filter((p: any) => p?.type === "text").map((p: any) => p.text).join("\n") : "";
-    if (!/^\s*(\*\*)?plan:?(\*\*)?\s*$/im.test(text) && !/^\s*1[.)]\s+\S/m.test(text)) return;
+    // Only a real plan: a "Plan:" heading followed by numbered steps.
+    if (!/^\s*(#+\s*|\*\*)?plan:?(\*\*)?\s*$[\s\S]*?^\s*1[.)]\s+\S/im.test(text)) return;
     const choice = await ctx.ui.select("Plan ready. What next?", ["Execute the plan", "Keep planning", "Leave plan mode"]);
     if (choice === "Execute the plan") {
       apply(false, ctx);
-      pi.sendUserMessage("Plan mode is off. Execute the plan above, step by step. Verify each step as the plan says, and tell me if something doesn't match what the plan expected.");
+      pi.sendUserMessage(
+        "Plan mode is off. Execute the plan above, step by step. Verify each step as the plan says, and tell me if something doesn't match what the plan expected.",
+        { deliverAs: "followUp" },
+      );
     } else if (choice === "Leave plan mode") {
       apply(false, ctx);
       ctx.ui.notify("Plan mode off: full tools back.", "info");

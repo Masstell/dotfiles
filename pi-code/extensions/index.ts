@@ -31,6 +31,9 @@ export default async function (pi: any) {
   const secrets = readSecrets();
   // The gate first, and outside any try: if anything below fails, bash must
   // still be classified, not run unchecked.
+  // Plan mode's gate goes first: it only ever blocks, and a command it blocks
+  // shouldn't wait on a classifier call. Its failure must not stop the classifier.
+  try { registerPlanMode(pi); } catch (err: any) { console.error(`homelab extensions: plan mode failed to load: ${String(err?.message || err)}`); }
   registerClassifier(pi, secrets);
   // A project's own .pi/extensions and skills would run inside pi's process,
   // where the keys are, and the agent can write them. Decline every project,
@@ -42,7 +45,6 @@ export default async function (pi: any) {
     ["web tools", registerWebTools],
     ["memory", registerMemory],
     ["lint", registerLint],
-    ["plan mode", registerPlanMode],
     ["subagent", registerSubagent],
     // Workers run headless: nobody to ask.
     ...(process.env.PI_SUBAGENT ? [] : ([["ask_user", registerAskUser]] as const)),

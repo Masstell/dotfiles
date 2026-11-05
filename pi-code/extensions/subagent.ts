@@ -20,7 +20,9 @@ import type { Secrets } from "./secrets.ts";
 const MAX_PARALLEL = Math.max(1, Math.min(4, Number(process.env.PI_SUBAGENT_MAX || "") || 3));
 const MAX_TASKS = 6;
 const TIMEOUT_MS = (Number(process.env.PI_SUBAGENT_TIMEOUT_S || "") || 1200) * 1000;
-const RESULT_CHARS = 20_000;
+const RESULT_CHARS = 20_000;     // per worker
+const RESULT_BUDGET = 60_000;    // all workers together (~15k tokens)
+const TASK_CHARS = 32_000;
 
 const MODES = {
   explore: {
@@ -52,7 +54,9 @@ function runWorker(task: string, mode: Mode, readOnly: boolean, secrets: Secrets
   const args = [process.argv[1], "--mode", "json", "-p", "--no-session", "--no-approve", "--tools", MODES[mode].tools, "--append-system-prompt", MODES[mode].prompt];
   const model = ctx?.model;
   if (model?.provider && model?.id) args.push("--model", `${model.provider}/${model.id}`);
-  args.push(task);
+  // "Task:" prefix: a task starting with "-" or "@" would otherwise be read
+  // as a flag or a file attachment.
+  args.push(`Task: ${task}`);
 
   const mem = (globalThis as any)[Symbol.for("homelab.pi.memory")];
   const env: Record<string, string> = { ...(process.env as Record<string, string>) };
@@ -68,11 +72,17 @@ function runWorker(task: string, mode: Mode, readOnly: boolean, secrets: Secrets
   });
 
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      res.error = "cancelled";
+      return resolve();
+    }
     let last = "";
     let stderr = "";
     let buf = "";
     let done = false;
-    const proc = spawn(process.execPath, args, { cwd: ctx?.cwd || process.cwd(), env, stdio: ["ignore", "pipe", "pipe", "pipe"] });
+    // Own process group, so a timeout or cancel also stops what the worker
+    // started (test runners, servers), not just its Node process.
+    const proc = spawn(process.execPath, args, { cwd: ctx?.cwd || process.cwd(), env, detached: true, stdio: ["ignore", "pipe", "pipe", "pipe"] });
     // Keys on fd 3, read once and closed by the worker's secrets.ts.
     const keys = proc.stdio[3] as any;
     keys?.on?.("error", () => { /* worker exited early */ });
@@ -90,7 +100,10 @@ function runWorker(task: string, mode: Mode, readOnly: boolean, secrets: Secrets
       onEvent();
       resolve();
     };
-    const kill = () => { try { proc.kill("SIGTERM"); } catch { /* gone */ } setTimeout(() => { try { proc.kill("SIGKILL"); } catch { /* gone */ } }, 5000).unref(); };
+    const killGroup = (sig: NodeJS.Signals) => {
+      try { if (proc.pid) process.kill(-proc.pid, sig); } catch { try { proc.kill(sig); } catch { /* gone */ } }
+    };
+    const kill = () => { killGroup("SIGTERM"); setTimeout(() => killGroup("SIGKILL"), 5000).unref(); };
     const abort = () => { kill(); finish("cancelled"); };
     const timer = setTimeout(() => { kill(); finish(`timed out after ${TIMEOUT_MS / 1000}s`); }, TIMEOUT_MS);
     if (signal?.aborted) return abort();
@@ -137,6 +150,8 @@ export default function registerSubagent(pi: any, secrets: Secrets) {
       "mode \"explore\" (default) reads, searches, runs checks and uses the web, and is told not to edit; " +
       "mode \"work\" can also edit files.",
     promptSnippet: "Delegate independent searches, reviews or edits to parallel workers with their own context",
+    // One call at a time, so two calls in one message can't double the cap.
+    executionMode: "sequential",
     promptGuidelines: [
       "Use subagent for work that splits into independent parts (search several areas, review separate files, research separate questions) or would fill your context with output you only need the conclusion of. Don't use it for a single quick lookup.",
       "Write each task so a newcomer could do it: the goal, the files or areas, and exactly what to report back.",
@@ -158,7 +173,7 @@ export default function registerSubagent(pi: any, secrets: Secrets) {
       const results: Result[] = tasks.map((t: any) => {
         let mode: Mode = t?.mode === "work" ? "work" : "explore";
         if (planning) mode = "explore"; // plan mode changes nothing, workers included
-        return { task: String(t?.task || "").trim(), mode, ok: false, text: "", web: false, turns: 0 };
+        return { task: String(t?.task || "").trim().slice(0, TASK_CHARS), mode, ok: false, text: "", web: false, turns: 0 };
       });
       const state = results.map(() => "queued");
       const progress = () => {
@@ -172,6 +187,7 @@ export default function registerSubagent(pi: any, secrets: Secrets) {
           const i = next++;
           const r = results[i];
           if (!r.task) { r.error = "empty task"; state[i] = "failed"; continue; }
+          if (signal?.aborted) { r.error = "cancelled"; state[i] = "cancelled"; continue; }
           state[i] = "running";
           progress();
           await runWorker(r.task, r.mode, planning, secrets, ctx, signal, progress, r);
@@ -183,10 +199,11 @@ export default function registerSubagent(pi: any, secrets: Secrets) {
 
       const web = results.some((r) => r.web);
       if (web) (globalThis as any)[Symbol.for("homelab.pi.memory.webTaint")]?.();
+      const perWorker = Math.min(RESULT_CHARS, Math.floor(RESULT_BUDGET / results.length));
       const body = results.map((r, i) => {
         const head = `## Worker ${i + 1} (${r.mode}) — ${r.ok ? "done" : `failed: ${r.error}`}`;
         let text = r.text || "(no answer)";
-        if (text.length > RESULT_CHARS) text = `${text.slice(0, RESULT_CHARS)}\n… (truncated)`;
+        if (text.length > perWorker) text = `${text.slice(0, perWorker)}\n… (truncated)`;
         return `${head}\nTask: ${r.task.slice(0, 300)}${r.task.length > 300 ? "…" : ""}\n\n${text}`;
       }).join("\n\n");
       const note = planning && tasks.some((t: any) => t?.mode === "work") ? "\n\n(Plan mode is on, so every worker ran in explore mode.)" : "";

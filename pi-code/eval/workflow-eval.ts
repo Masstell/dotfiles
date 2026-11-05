@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { isReadOnlyCommand } from "../extensions/plan-mode.ts";
-import registerLint from "../extensions/lint.ts";
+import registerLint, { newProblems } from "../extensions/lint.ts";
 
 let pass = 0;
 let fail = 0;
@@ -97,6 +97,7 @@ const files: [string, string, boolean][] = [
   ["good.js", "export const x = 1;\n", false],
   ["noext-script", "#!/usr/bin/env bash\nfi\n", true],
   ["notes.md", "# not checked > at all (\n", false],
+  ["zsh-script", "#!/usr/bin/env zsh\nfor f (*.txt) print $f\n", false],
 ];
 for (const [name, body, bad] of files) {
   fs.writeFileSync(path.join(dir, name), body);
@@ -112,6 +113,13 @@ check("lint skips failed edits", errResult === undefined);
 const readResult = await handler({ toolName: "read", input: { path: "bad.sh" }, content: [], isError: false }, { cwd: dir });
 check("lint ignores other tools", readResult === undefined);
 fs.rmSync(dir, { recursive: true, force: true });
+
+// ---- lint baseline: only problems the edit added
+const before = "a.sh:3:1: warning: Double quote to prevent globbing [SC2086]\na.sh:9:5: warning: x is unused [SC2034]";
+const after = "a.sh:4:1: warning: Double quote to prevent globbing [SC2086]\na.sh:10:5: warning: x is unused [SC2034]\na.sh:12:1: warning: y is unused [SC2034]";
+check("lint baseline drops warnings that only moved", newProblems(after, before) === "a.sh:12:1: warning: y is unused [SC2034]", newProblems(after, before));
+check("lint baseline keeps everything for a new file", newProblems(after, undefined) === after);
+check("lint baseline counts repeats", newProblems("f:1: w A\nf:2: w A", "f:1: w A") === "f:2: w A", newProblems("f:1: w A\nf:2: w A", "f:1: w A"));
 
 // ---- prompt templates: frontmatter with a description, no attribution
 const pdir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "prompts");

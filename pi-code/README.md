@@ -28,6 +28,7 @@ pi-code/
 │   ├── subagent.ts            subagent tool: parallel workers with their own context
 │   ├── todo.ts                todo_write tool: a visible task checklist; /todos
 │   ├── undo.ts                snapshot the project before each prompt; /undo
+│   ├── folders.ts             request_folder_access, /add-dir, /dirs, /remove-dir
 │   ├── schedule.ts            cron_create / schedule_wakeup: prompts on a schedule in this session
 │   ├── routines.ts            routine_create/list/delete/run, /routines; notify inside a run
 │   ├── routines-core.ts       routine files: validation, signing, state, the run prompt
@@ -38,6 +39,7 @@ pi-code/
 ├── bench/
 │   ├── bench.ts / bench.sh    coding bench: pi solves synthetic tasks, hidden tests grade
 │   └── tasks/<id>/            task.json, repo/ (pi's start), hidden/ (grading), solution/
+├── grants.py                  folder grants: verify signed requests, the per-project list (pi.sh)
 ├── policy/
 │   ├── bash-safety-sandbox.md classifier policy inside the sandbox (default)
 │   ├── bash-safety.md         classifier policy without it (PI_NOSANDBOX=1)
@@ -75,12 +77,16 @@ cd ~/some-project
 pi                          # interactive
 pi -p "why does the build fail?"
 PI_LOCAL_READONLY=1 pi      # plan mode: edits and non-read-only bash blocked
-PI_RW=/mnt/raid/Foundry pi  # extra writable paths (colon-separated)
+PI_RW=/mnt/raid/Foundry pi  # extra writable paths for this launch (colon-separated)
 PI_NOSANDBOX=1 pi           # no sandbox: loud warning, stricter host policy
 ```
 
 `/advisor [model=<name>] <question>` asks the advisor yourself; the answer
 lands in the conversation so the agent sees it too.
+
+Folders outside the project are added from the chat, not at launch: pi asks
+(`request_folder_access`) when the task needs to write somewhere, or you type
+`/add-dir <folder>`. See [Folder access](#folder-access).
 
 ## The sandbox (`pi.sh`)
 
@@ -94,7 +100,8 @@ extensions all run inside. The kernel enforces it; the model is never asked.
 | `/tmp`, `/var/tmp` | private, empty, discarded at exit |
 | Tool caches (`~/.cache`, `~/.npm`, `~/.cargo`, `~/.rustup`, `uv`, `pnpm`, `~/go`) | writable but throwaway (tmpfs overlay): `~/.cargo/bin`, `~/.cargo/env` and pre-commit envs run outside later |
 | Rest of home, `/etc`, `/usr`, … | read-only |
-| `/mnt/raid` (all of tank the VM mounts) | read-only; `PI_RW=<path>` to opt in |
+| `/mnt/raid` (all of tank the VM mounts) | read-only; `/add-dir <path>` (or `PI_RW=<path>`) to opt in |
+| Folders added for the project (`/add-dir`, or approved when pi asked) | read-write, remembered per project |
 | `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.docker`, `~/.kube`, gh/op/gcloud, Claude/Codex/Gemini/opencode credentials, `.env`, shell histories | hidden (empty) |
 | `~/.claude/projects` (Claude Code chat transcripts) | read-only; the rest of `~/.claude` stays hidden |
 | SSH agent, `/run/user/<uid>` sockets | unreachable |
@@ -298,6 +305,30 @@ Per-project notes for future sessions, kept away from Claude Code.
     hooks (nothing planted there runs), and a restore only writes inside the
     project. Off for projects over 20,000 files or 500 MB, for read-only
     sessions and in print mode.
+
+## Folder access
+
+The sandbox's mounts are fixed when pi starts, so a folder can't be added to
+a running pi. Instead (`folders.ts`, like Claude Code's `/add-dir`):
+
+- pi calls `request_folder_access` with the folder and why; you get a yes/no
+  on screen. Or you type `/add-dir <folder>` (no prompt: you asked).
+- On yes, pi restarts into the same conversation (`--session`) with the
+  folder writable and continues the task by itself. In-session scheduled
+  jobs and launch flags don't carry over the restart.
+- Approved folders are remembered for the project (in
+  `~/.config/pi-agent/grants/`, hidden from the sandbox) and mounted at every
+  launch there. `/dirs` lists them; `/remove-dir <folder>` drops one.
+- Never grantable: `/`, home itself or above it, hidden folders in home
+  (`~/.config`, `~/.local` ...), system folders (`/etc`, `/usr`, `/var`,
+  `/tmp` ...), this repo. Folders on the storage array get a warning in the
+  prompt.
+- pi's process signs each request with a key bash can't read (fd 3, like
+  memory and routines), plus a one-time nonce for the launch; `pi.sh` checks
+  the signature and every folder again (`grants.py`) before mounting
+  anything. A request written by a command inside the sandbox is ignored.
+- Each run, the model is told what it can write, that it can ask for more,
+  and that a blocked bash command can't be approved mid-session.
 
 ## Scheduling and routines
 

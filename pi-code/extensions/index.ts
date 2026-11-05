@@ -15,6 +15,7 @@
 //   routines          routine_create: scheduled unattended runs that survive restarts; notify
 //   todo              todo_write: a visible task checklist for multi-step work; /todos
 //   undo              snapshot the project before each prompt; /undo puts files back
+//   folders           request_folder_access, /add-dir, /dirs: more writable folders from the chat
 
 import registerArbiter from "./arbiter-provider.ts";
 import registerClassifier from "./bash-classifier.ts";
@@ -29,6 +30,7 @@ import registerSchedule from "./schedule.ts";
 import registerRoutines from "./routines.ts";
 import registerTodo from "./todo.ts";
 import registerUndo from "./undo.ts";
+import registerFolders from "./folders.ts";
 import { readSecrets } from "./secrets.ts";
 
 export default async function (pi: any) {
@@ -57,6 +59,7 @@ export default async function (pi: any) {
     ["routines", registerRoutines],
     ["todo", registerTodo],
     ["undo", registerUndo],
+    ["folders", registerFolders],
     // Workers and routine runs are headless: nobody to ask, nothing to schedule into.
     ...(process.env.PI_SUBAGENT || process.env.PI_ROUTINE ? [] : ([["ask_user", registerAskUser], ["schedule", registerSchedule]] as const)),
   ] as const) {

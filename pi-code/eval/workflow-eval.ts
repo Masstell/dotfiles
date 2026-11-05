@@ -2,6 +2,7 @@
 // allowlist and lint feedback on real files.
 // No model calls. Run: ./workflow-eval.sh
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,7 @@ import { isReadOnlyCommand } from "../extensions/plan-mode.ts";
 import registerLint, { newProblems } from "../extensions/lint.ts";
 import registerTodo, { fromBranch, problems, render } from "../extensions/todo.ts";
 import registerUndo, { Store } from "../extensions/undo.ts";
+import registerFolders, { refusal, sandboxNote } from "../extensions/folders.ts";
 
 let pass = 0;
 let fail = 0;
@@ -135,7 +137,7 @@ function fakeExtPi() {
     sendMessage: (m: any) => messages.push(m),
   };
   const emit = async (ev: string, e: any, ctx: any) => { for (const h of handlers.get(ev) || []) await h(e, ctx); };
-  return { pi, tools, cmds, entries, messages, emit };
+  return { pi, tools, cmds, entries, messages, emit, handlers };
 }
 const textOf = (r: any) => r?.content?.map((c: any) => c.text).join("") || "";
 
@@ -256,6 +258,84 @@ const textOf = (r: any) => r?.content?.map((c: any) => c.text).join("") || "";
   const sz = new Store(path.join(root, "undo/store.git"), proj).size();
   check("undo: size skips ignored files", !!sz && sz.files === 3, sz);
   delete process.env.PI_PROJECT_DIR; delete process.env.PI_UNDO_DIR;
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
+// ---- folder access (folders.ts + grants.py)
+{
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.homedir(), "folders-eval-")));
+  const home = path.join(root, "home");
+  const proj = path.join(home, "proj"), other = path.join(home, "h3-tools"), hidden = path.join(home, ".config", "x");
+  for (const d of [proj, other, hidden]) fs.mkdirSync(d, { recursive: true });
+  const codeDir = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+  const o = { home, project: proj, codeDir };
+  check("folders: a sibling project folder is allowed", refusal(other, o) === "");
+  check("folders: home itself refused", /home itself/.test(refusal(home, o)));
+  check("folders: above home refused", /home itself/.test(refusal(root, o)));
+  check("folders: hidden home folders refused", /hidden/.test(refusal(hidden, o)));
+  check("folders: system folders refused", /system/.test(refusal("/etc", o)) && /system/.test(refusal("/usr/local", o)) && /system/.test(refusal("/var/lib", o)));
+  check("folders: pi's own code refused", /own code/.test(refusal(codeDir, o)) && /own code/.test(refusal(path.join(codeDir, "extensions"), o)));
+  check("folders: inside the project is already writable", /already writable/.test(refusal(path.join(proj), o)));
+  check("folders: the note tells the model how to ask", /request_folder_access/.test(sandboxNote(proj, [other], true)) && /h3-tools/.test(sandboxNote(proj, [other], true)) && !/request_folder_access/.test(sandboxNote(proj, [], false)));
+
+  // The extension signs a request; grants.py (as pi.sh runs it) checks it.
+  const req = path.join(root, "request"), keyFile = path.join(root, "grant.key"), key = "k".repeat(64), nonce = "n1";
+  fs.writeFileSync(keyFile, key);
+  const env = { ...process.env, HOME: home };
+  const grants = (...a: string[]) => {
+    try { return { ok: true, out: execFileSync("python3", ["-I", path.join(codeDir, "grants.py"), ...a], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }) }; }
+    catch (e: any) { return { ok: false, out: String(e.stderr || e.message) }; }
+  };
+  Object.assign(process.env, { PI_GRANT_REQUEST: req, PI_GRANT_NONCE: nonce, PI_PROJECT_DIR: proj, PI_CODE_DIR: path.join(codeDir, "extensions"), PI_EXTRA_RW: "" });
+  const realHome = process.env.HOME; process.env.HOME = home;
+  const f = fakeExtPi();
+  let shut = 0, confirmBody = "";
+  (f.pi as any).sendMessage = (m: any, opts: any) => f.messages.push({ ...m, opts });
+  registerFolders(f.pi, { grantKey: key } as any);
+  const ctx: any = {
+    hasUI: true, shutdown: () => shut++, sessionManager: { getSessionFile: () => "/sessions/s1.jsonl" },
+    ui: { notify: () => {}, confirm: async (_t: string, b: string) => { confirmBody = b; return true; } },
+  };
+  const tool = f.tools.get("request_folder_access");
+  const r0 = await tool.execute("1", { path: hidden, reason: "x" }, undefined, undefined, ctx);
+  check("folders: tool refuses a hidden folder without asking", r0.isError === true && shut === 0 && !fs.existsSync(req));
+  const r1 = await tool.execute("1", { path: other, reason: "the loop writes queue files there" }, undefined, undefined, ctx);
+  check("folders: approved -> signed request written, pi asked to shut down", !r1.isError && shut === 1 && fs.existsSync(req) && /queue files/.test(confirmBody), textOf(r1));
+  check("folders: the approval ends the turn (no follow-up model call)", r1.terminate === true);
+  const after: any[] = [];
+  for (const h of (f as any).handlers?.get?.("tool_call") || []) after.push(await h({ toolName: "write", input: {} }, ctx));
+  check("folders: every other tool call is blocked while restarting", after.some((x) => x?.block === true && x?.terminate === true), after);
+  const applied = grants("apply", req, keyFile, nonce, proj);
+  const res = applied.ok ? JSON.parse(applied.out) : {};
+  check("folders: grants.py accepts it and records the folder", applied.ok && res.added?.[0] === other && res.by === "tool" && res.session === "/sessions/s1.jsonl", applied.out);
+  check("folders: listed for the project next launch", grants("list", proj).out.trim() === other);
+  check("folders: not listed for another project", grants("list", path.join(home, "elsewhere")).out.trim() === "");
+  // Forgeries: bash in the sandbox can write the file, but not sign it.
+  const line = fs.readFileSync(req, "utf8").split("\n")[0];
+  fs.writeFileSync(req, line.replace("h3-tools", "h3-tools2") + "\n" + fs.readFileSync(req, "utf8").split("\n")[1] + "\n");
+  check("folders: a tampered request is refused", !grants("apply", req, keyFile, nonce, proj).ok);
+  fs.writeFileSync(req, line.replace(other, hidden) + "\n" + crypto.createHmac("sha256", key).update(`pi-grant\0${line.replace(other, hidden)}`).digest("hex") + "\n");
+  const hid = grants("apply", req, keyFile, nonce, proj);
+  check("folders: grants.py re-checks folders even when signed", hid.ok && JSON.parse(hid.out).added.length === 0);
+  fs.writeFileSync(req, line + "\n" + crypto.createHmac("sha256", key).update(`pi-grant\0${line}`).digest("hex") + "\n");
+  check("folders: another launch's request (old nonce) is refused", !grants("apply", req, keyFile, "n2", proj).ok);
+  // A folder that later turns into a link elsewhere drops out of the list.
+  fs.rmSync(other, { recursive: true }); fs.symlinkSync(hidden, other);
+  check("folders: a grant that now resolves elsewhere is skipped", grants("list", proj).out.trim() === "");
+  // After the restart: the model is told and picks the task back up.
+  process.env.PI_GRANT_RESUMED = JSON.stringify({ added: [other], removed: [], by: "tool" });
+  const g = fakeExtPi();
+  (g.pi as any).sendMessage = (m: any, opts: any) => g.messages.push({ ...m, opts });
+  registerFolders(g.pi, { grantKey: key } as any);
+  await g.emit("session_start", { reason: "startup" }, { hasUI: true, ui: { notify: () => {} } });
+  check("folders: after restart the model continues by itself", g.messages.length === 1 && g.messages[0].opts?.triggerTurn === true && /Continue the task/.test(g.messages[0].content));
+  // Not offered to workers or headless sessions.
+  process.env.PI_SUBAGENT = "1";
+  const w = fakeExtPi(); registerFolders(w.pi, { grantKey: key } as any);
+  check("folders: a worker can't request folders", (await w.tools.get("request_folder_access").execute("1", { path: proj, reason: "x" }, undefined, undefined, ctx)).isError === true);
+  delete process.env.PI_SUBAGENT;
+  process.env.HOME = realHome;
+  for (const k of ["PI_GRANT_REQUEST", "PI_GRANT_NONCE", "PI_PROJECT_DIR", "PI_CODE_DIR", "PI_EXTRA_RW", "PI_GRANT_RESUMED"]) delete process.env[k];
   fs.rmSync(root, { recursive: true, force: true });
 }
 

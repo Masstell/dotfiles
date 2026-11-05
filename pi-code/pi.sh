@@ -125,6 +125,15 @@ if [[ ! -s "$ROUTINE_KEY_FILE" ]]; then
 fi
 # A routine run can't manage routines, so it doesn't get the key.
 [[ -z "${PI_ROUTINE:-}" ]] && KEYS+=$'\n'"PI_ROUTINE_KEY=$(<"$ROUTINE_KEY_FILE")"
+# Folder-access requests (extensions/folders.ts) are signed the same way;
+# grants.py checks them below, after pi exits, before mounting anything new.
+GRANT_KEY_FILE="${HOME}/.config/pi-agent/grant.key"
+[[ -f "$GRANT_KEY_FILE" && ! -s "$GRANT_KEY_FILE" ]] && (( $(date +%s) - $(stat -c %Y "$GRANT_KEY_FILE") > 10 )) && rm -f "$GRANT_KEY_FILE"
+if [[ ! -s "$GRANT_KEY_FILE" ]]; then
+    (umask 077; set -o noclobber
+     head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$GRANT_KEY_FILE") 2>/dev/null || true
+fi
+[[ -z "${PI_ROUTINE:-}" ]] && KEYS+=$'\n'"PI_GRANT_KEY=$(<"$GRANT_KEY_FILE")"
 
 # Nothing inside may get code into pi's process, where the keys live:
 # - Node opens its inspector (a code-execution port) on SIGUSR1, which any
@@ -212,6 +221,11 @@ fi
 # The project, plus any explicitly requested extra paths.
 [[ "$RW_PROJECT" == 1 ]] && args+=(--bind "$PROJECT" "$PROJECT")
 IFS=: read -r -a _extra <<<"${PI_RW:-}"
+# Folders you approved from the chat for this project (/add-dir, or pi asked).
+if [[ "$RW_PROJECT" == 1 && -z "${PI_ROUTINE:-}" ]]; then
+    mapfile -t _granted < <(python3 -I "$PI_CODE_DIR/grants.py" list "$PROJECT" 2>/dev/null || true)
+    _extra+=("${_granted[@]}")
+fi
 for p in "${_extra[@]}"; do
     [[ -n "$p" ]] || continue
     p="$(readlink -f "$p")"
@@ -305,6 +319,21 @@ if [[ "$RW_PROJECT" == 1 && -z "${PI_ROUTINE:-}" && "$_print" == 0 ]]; then
     args+=(--bind "$UNDO_DIR" "$UNDO_DIR")
 fi
 
+# Folder requests (extensions/folders.ts): pi writes a signed request here and
+# exits; this launcher checks it after bwrap returns. Interactive project
+# sessions only. The nonce ties a request to this launch.
+GRANT_REQ="" GRANT_NONCE=""
+if [[ "$RW_PROJECT" == 1 && -z "${PI_ROUTINE:-}" && "$_print" == 0 ]]; then
+    GRANT_DIR="${HOME}/.local/state/pi-grants"
+    mkdir -p -m 700 "$GRANT_DIR"
+    GRANT_REQ="$GRANT_DIR/request-$$"
+    GRANT_NONCE="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    rm -f "$GRANT_REQ"
+    args+=(--bind "$GRANT_DIR" "$GRANT_DIR")
+fi
+_extra_rw=""
+for p in "${_extra[@]}"; do [[ -n "$p" ]] && _extra_rw+="${_extra_rw:+:}$(readlink -f "$p")"; done
+
 # Routines (extensions/routines.ts): writable, so an approved routine can be
 # saved from any interactive session; read-only inside a routine run. Files are signed, so one written here by anything
 # but routine_create is ignored by the runner; its state lives in
@@ -368,6 +397,9 @@ done
 args+=(
     --setenv PI_SANDBOX 1
     --setenv PI_UNDO_DIR "$UNDO_DIR"
+    --setenv PI_GRANT_REQUEST "$GRANT_REQ"
+    --setenv PI_GRANT_NONCE "$GRANT_NONCE"
+    --setenv PI_EXTRA_RW "$_extra_rw"
     --setenv PI_CODE_DIR "$PI_CODE_DIR"
     --setenv PI_PROJECT_DIR "$([[ "$RW_PROJECT" == 1 ]] && echo "$PROJECT" || echo "none — read-only session")"
     --setenv PI_SECRETS_FD 3
@@ -382,9 +414,25 @@ args+=(
 [[ "${PI_LOCAL_READONLY:-}" =~ ^(1|true|yes|on)$ ]] && echo "pi: READ-ONLY / plan mode is ON." >&2
 _before="$(git_fingerprint)"
 rc=0
+[[ -n "${PI_GRANT_RESUMED:-}" ]] && args+=(--setenv PI_GRANT_RESUMED "$PI_GRANT_RESUMED")
 bwrap "${args[@]}" -- "$PI_BIN" "$@" 3<<<"$KEYS" 4<<<'{}' || rc=$?
 if [[ "$(git_fingerprint)" != "$_before" ]]; then
     echo "pi: ⚠️  ${_git} was changed or replaced during this session (config, hooks or the .git" >&2
     echo "    entry itself). Inspect .git/config and .git/hooks before running git outside pi." >&2
 fi
+# A folder was approved (or removed) in the chat: record it, then start again
+# into the same session so the new mounts apply. Original flags aren't kept.
+if [[ -n "$GRANT_REQ" && -s "$GRANT_REQ" ]]; then
+    _res="$(python3 -I "$PI_CODE_DIR/grants.py" apply "$GRANT_REQ" "$GRANT_KEY_FILE" "$GRANT_NONCE" "$PROJECT")" || _res=""
+    rm -f "$GRANT_REQ"
+    if [[ -n "$_res" ]]; then
+        _session="$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1]).get("session") or "")' "$_res")"
+        echo "pi: folder access changed; restarting into the same conversation…" >&2
+        if [[ -n "$_session" && -f "$_session" ]]; then
+            PI_GRANT_RESUMED="$_res" exec "$PI_CODE_DIR/pi.sh" --session "$_session"
+        fi
+        PI_GRANT_RESUMED="$_res" exec "$PI_CODE_DIR/pi.sh" --continue
+    fi
+fi
+[[ -n "$GRANT_REQ" ]] && rm -f "$GRANT_REQ"
 exit "$rc"

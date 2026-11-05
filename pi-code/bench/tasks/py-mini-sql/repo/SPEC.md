@@ -15,7 +15,7 @@ SELECT select_list FROM t [WHERE cond] [GROUP BY col {, col}] [ORDER BY order_it
        [LIMIT n [OFFSET m]]
 select_list := "*" | item {, item}
 item        := col | COUNT(*) | COUNT(col) | SUM(col) | MIN(col) | MAX(col) | AVG(col)
-order_item  := (item | n) [ASC | DESC]          -- n: 1-based position in the select list
+order_item  := (item | n) [ASC | DESC]          -- n: 1-based output column position
 cond        := cond OR cond | cond AND cond | NOT cond | ( cond )
              | operand op operand | operand IS NULL | operand IS NOT NULL
 op          := = | != | <> | < | <= | > | >=
@@ -41,7 +41,8 @@ Queries never compare a number with a string.
   (NULLs group together). Every plain column in the select list must be one of the GROUP BY columns.
   A query with aggregates and no GROUP BY can't select plain columns.
 - ORDER BY items refer to the select list: a column or aggregate that appears in it (written the same
-  way), or a position. NULLs come first in ascending order and last in descending order. Without
+  way), or a position among the output columns (with `*`, the table's columns: `SELECT * ... ORDER BY 4`
+  sorts by the fourth column). NULLs come first in ascending order and last in descending order. Without
   ORDER BY, row order is up to you.
 - `LIMIT n` keeps the first n result rows after ordering; `OFFSET m` skips m rows first.
 

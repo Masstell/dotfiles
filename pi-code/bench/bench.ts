@@ -35,6 +35,7 @@ type Task = { id: string; dir: string; prompt: string; check: string; timeoutMin
 type Result = {
   task: string; attempt: number; pass: boolean; seconds: number; toolCalls: number; tools: Record<string, number>;
   usedTodo: boolean; turns: number; error?: string; checkOutput?: string; diff?: string;
+  finalText?: string; // pi's last words: why it stopped, what it thinks it did
 };
 
 function args() {
@@ -88,7 +89,7 @@ function runPi(t: Task, work: string): Promise<Omit<Result, "task" | "attempt" |
   return new Promise((resolve) => {
     const start = Date.now();
     const tools: Record<string, number> = {};
-    let turns = 0, buf = "", err = "", lastStop = "", lastError = "", done = false;
+    let turns = 0, buf = "", err = "", lastStop = "", lastError = "", lastText = "", done = false;
     const child = spawn(PI, ["--mode", "json", "-p", "--no-session", t.prompt], {
       cwd: work, stdio: ["ignore", "pipe", "pipe"], detached: true,
       env: { ...process.env, PI_BENCH: "1" },
@@ -98,7 +99,7 @@ function runPi(t: Task, work: string): Promise<Omit<Result, "task" | "attempt" |
       done = true;
       clearTimeout(timer);
       const toolCalls = Object.values(tools).reduce((a, b) => a + b, 0);
-      resolve({ seconds: Math.round((Date.now() - start) / 1000), toolCalls, tools, usedTodo: !!tools.todo_write, turns, error });
+      resolve({ seconds: Math.round((Date.now() - start) / 1000), toolCalls, tools, usedTodo: !!tools.todo_write, turns, error, finalText: lastText.slice(-1500) || undefined });
     };
     const timer = setTimeout(() => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } finish(`timed out after ${t.timeoutMin} min`); }, t.timeoutMin * 60_000);
     child.stdout.on("data", (d) => {
@@ -109,7 +110,11 @@ function runPi(t: Task, work: string): Promise<Omit<Result, "task" | "attempt" |
         let ev: any; try { ev = JSON.parse(line); } catch { continue; }
         if (ev.type === "tool_execution_start") tools[ev.toolName] = (tools[ev.toolName] || 0) + 1;
         else if (ev.type === "turn_start") turns++;
-        else if (ev.type === "message_end" && ev.message?.role === "assistant") { lastStop = ev.message.stopReason || ""; lastError = ev.message.errorMessage || ""; }
+        else if (ev.type === "message_end" && ev.message?.role === "assistant") {
+          lastStop = ev.message.stopReason || ""; lastError = ev.message.errorMessage || "";
+          const t = Array.isArray(ev.message.content) ? ev.message.content.filter((c: any) => c?.type === "text").map((c: any) => c.text).join("\n").trim() : "";
+          if (t) lastText = t;
+        }
       }
     });
     child.stderr.on("data", (d) => { if (err.length < 4000) err += d; });

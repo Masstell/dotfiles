@@ -343,6 +343,13 @@ or "look again in 10 minutes":
   ntfy, mail); the homelab's Ansible installs one. Without one, alerts are
   only logged. Failure and recovery messages wait in an outbox until the
   command takes them.
+- The machine's config can set routines too: root-owned JSON files in
+  `/etc/pi-routines` (`name`, `cron`, `prompt`, `cwd`, optional `tz`,
+  `timeoutMin`), which the homelab's Ansible writes for every pi VM. They are
+  trusted because only root can write them (folder and file root-owned, not
+  writable by anyone else; links ignored), so they need no on-screen yes.
+  pi lists them as `[machine config]` and can run them now, but can't change
+  or delete them, and a pi routine can't take their name.
 - Logs: `journalctl -u pi-routines`. State per routine:
   `~/.local/state/pi-routines/<name>.json` (read-only inside the sandbox).
 

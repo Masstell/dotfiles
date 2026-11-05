@@ -22,7 +22,7 @@ import os from "node:os";
 import path from "node:path";
 import { everyHour, matchesWall, nextWall, parseCron, wallClock, wallKey, type Wall } from "../extensions/cron.ts";
 import {
-  NOTES_MAX, NOTE_CHARS, SUMMARY_CHARS, atomicWrite, loadRoutines, readLedger, readRegular, readState, routinesDir,
+  NOTES_MAX, NOTE_CHARS, SUMMARY_CHARS, atomicWrite, loadAllRoutines, readLedger, readRegular, readState, routinesDir,
   runPrompt, writeLedger, writeState, type Ledger, type RoutineState, type SignedRoutine,
 } from "../extensions/routines-core.ts";
 
@@ -365,14 +365,14 @@ function reconcile(routines: SignedRoutine[], ignored: string[], ledger: Ledger,
   for (const r of routines) {
     const seen = ledger[r.name];
     if (!seen || seen.gone || seen.created !== r.created) {
-      enqueue(`🗓️ ${HOST} · routine ${r.name} ${seen && !seen.gone ? "changed" : "added"}: "${r.cron}" (${r.tz}) in ${r.cwd}`);
+      enqueue(`🗓️ ${HOST} · routine ${r.name} ${seen && !seen.gone ? "changed" : "added"}${r.managed ? " (machine config)" : ""}: "${r.cron}" (${r.tz}) in ${r.cwd}`);
       ledger[r.name] = { created: r.created };
       changed = true;
     }
   }
   const live = new Set(routines.map((r) => r.name));
-  // Record deletions only when every file was read with the key: a missing
-  // key or an unreadable folder must not tombstone routines for good.
+  // Record deletions only when every file was read (with the key, for pi's
+  // own): a missing key or an unreadable folder must not tombstone routines.
   for (const [name, e] of complete ? Object.entries(ledger) : []) {
     if (!e.gone && !live.has(name)) {
       enqueue(`🗑️ ${HOST} · routine ${name} was deleted (or stopped being valid).`);
@@ -386,7 +386,7 @@ function reconcile(routines: SignedRoutine[], ignored: string[], ledger: Ledger,
     if (ig) log(`ignored: ${ig}`);
     // At most one refusal notice an hour: planting junk each minute can't flood the room.
     if (ig && Date.now() - lastRefusedPost >= 3600_000) {
-      enqueue(`🚫 ${HOST} · pi-routines refused ${ignored.length} file(s) in ~/.local/share/pi-routines: ${defuse(ig).slice(0, 1000)}`);
+      enqueue(`🚫 ${HOST} · pi-routines refused ${ignored.length} routine file(s): ${defuse(ig).slice(0, 1000)}`);
       lastRefusedPost = Date.now();
     }
     lastIgnored = ig;
@@ -395,7 +395,7 @@ function reconcile(routines: SignedRoutine[], ignored: string[], ledger: Ledger,
 
 export function tick(now = Date.now()) {
   const ledger = readLedger();
-  const { routines, ignored, complete } = loadRoutines(readKey(), routinesDir(), ledger);
+  const { routines, ignored, complete } = loadAllRoutines(readKey(), routinesDir(), ledger);
   reconcile(routines, ignored, ledger, complete);
   const requested = takeRequests();
   const states: Record<string, RoutineState> = {};

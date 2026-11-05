@@ -11,6 +11,10 @@
 // human: only an interactive session can, after an on-screen yes. Subagents,
 // print-mode runs and routine runs themselves cannot. Files are signed
 // (routines-core.ts), so one planted by bash is ignored.
+//
+// The machine's config can also set routines (root-owned files in
+// /etc/pi-routines, from Ansible): they run the same way and are listed here,
+// but are changed only through that config.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -18,7 +22,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { describeNext, nextRun, parseCron } from "./cron.ts";
 import {
-  MAX_ROUTINES, TIMEOUT_DEFAULT_MIN, TIMEOUT_MAX_MIN, defaultTimeZone, deleteRoutine, loadRoutines,
+  MAX_ROUTINES, TIMEOUT_DEFAULT_MIN, TIMEOUT_MAX_MIN, defaultTimeZone, deleteRoutine, loadAllRoutines,
   readState, routinesDir, saveRoutine, validate, type Routine,
 } from "./routines-core.ts";
 import type { Secrets } from "./secrets.ts";
@@ -38,7 +42,7 @@ function nextText(r: Routine): string {
 }
 
 function listText(key: string): string {
-  const { routines, ignored } = loadRoutines(key);
+  const { routines, ignored } = loadAllRoutines(key);
   const lines: string[] = [];
   if (!routines.length) lines.push("No routines on this VM.");
   for (const r of routines) {
@@ -46,7 +50,7 @@ function listText(key: string): string {
     const last = s.lastEnd
       ? `last run ${s.lastEnd}: ${s.lastOk ? (s.lastNotified?.length ? `reported "${s.lastNotified.join(" | ").slice(0, 200)}"` : "all as expected") : `failed (${s.lastError})`}`
       : "not run yet";
-    lines.push(`${r.name}  "${r.cron}" (${r.tz})  next: ${nextText(r)}\n    in ${r.cwd}, timeout ${r.timeoutMin} min; ${last}\n    ${r.prompt.replace(/\s+/g, " ").slice(0, 200)}`);
+    lines.push(`${r.name}${r.managed ? " [machine config]" : ""}  "${r.cron}" (${r.tz})  next: ${nextText(r)}\n    in ${r.cwd}, timeout ${r.timeoutMin} min; ${last}\n    ${r.prompt.replace(/\s+/g, " ").slice(0, 200)}`);
   }
   if (ignored.length) lines.push(`Ignored (never run): ${ignored.join("; ")}`);
   return lines.join("\n");
@@ -118,7 +122,9 @@ export default function registerRoutines(pi: any, secrets: Secrets) {
       if (!fs.statSync(r.cwd).isDirectory()) return text(`cwd is not a directory: ${r.cwd}`, true);
       const errs = validate(r, true);
       if (errs.length) return text(`Invalid routine: ${errs.join("; ")}`, true);
-      const existing = loadRoutines(key).routines;
+      const all = loadAllRoutines(key).routines;
+      if (all.some((x) => x.name === r.name && x.managed)) return text(`"${r.name}" is set by this machine's config (Ansible); change it there, or pick another name.`, true);
+      const existing = all.filter((x) => !x.managed);
       const replacing = existing.some((x) => x.name === r.name);
       if (!replacing && existing.length >= MAX_ROUTINES) return text(`This VM already has ${MAX_ROUTINES} routines; delete one first.`, true);
       const ok = await ctx.ui.confirm(
@@ -160,7 +166,9 @@ export default function registerRoutines(pi: any, secrets: Secrets) {
       const why = cannotManage(ctx);
       if (why) return text(why, true);
       const name = String(p.name);
-      if (!loadRoutines(key).routines.some((r) => r.name === name)) return text(`No routine "${name}".\n${listText(key)}`, true);
+      const found = loadAllRoutines(key).routines.find((r) => r.name === name);
+      if (!found) return text(`No routine "${name}".\n${listText(key)}`, true);
+      if (found.managed) return text(`"${name}" is set by this machine's config (Ansible); it can only be removed there.`, true);
       if (!(await ctx.ui.confirm(`Delete routine "${name}" on ${os.hostname()}?`, "It stops running; you can create it again later."))) {
         return text("The owner declined; the routine stays.", true);
       }
@@ -177,7 +185,7 @@ export default function registerRoutines(pi: any, secrets: Secrets) {
       const why = cannotManage(ctx);
       if (why) return text(why, true);
       const name = String(p.name);
-      if (!loadRoutines(key).routines.some((r) => r.name === name)) return text(`No routine "${name}".`, true);
+      if (!loadAllRoutines(key).routines.some((r) => r.name === name)) return text(`No routine "${name}".`, true);
       fs.writeFileSync(path.join(routinesDir(), `${name}.run`), new Date().toISOString() + "\n");
       return text(`Queued "${name}" to run within a minute. Check routine_list afterwards for its result.`);
     },
@@ -188,11 +196,12 @@ export default function registerRoutines(pi: any, secrets: Secrets) {
     handler: async (args: string, ctx: any) => {
       const [verb, name] = args.trim().split(/\s+/);
       if (verb === "delete" && name) {
+        if (loadAllRoutines(key).routines.some((r) => r.name === name && r.managed)) { ctx.ui.notify(`"${name}" is set by this machine's config (Ansible); remove it there.`, "warning"); return; }
         ctx.ui.notify(deleteRoutine(name) ? `Deleted routine "${name}".` : `No routine "${name}".`, "info");
         return;
       }
       if (verb === "run" && name) {
-        if (!loadRoutines(key).routines.some((r) => r.name === name)) { ctx.ui.notify(`No routine "${name}".`, "warning"); return; }
+        if (!loadAllRoutines(key).routines.some((r) => r.name === name)) { ctx.ui.notify(`No routine "${name}".`, "warning"); return; }
         fs.writeFileSync(path.join(routinesDir(), `${name}.run`), new Date().toISOString() + "\n");
         ctx.ui.notify(`Queued "${name}"; it starts within a minute.`, "info");
         return;

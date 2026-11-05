@@ -22,6 +22,8 @@ process.env.HOME = tmp;
 process.env.PI_ROUTINES_DIR = path.join(tmp, "routines");
 process.env.PI_ROUTINES_STATE_DIR = path.join(tmp, "state");
 process.env.PI_TZ = "America/Denver";
+process.env.PI_ROUTINES_MANAGED_DIR = path.join(tmp, "managed");
+process.env.PI_ROUTINES_MANAGED_UID = String(process.getuid!());
 fs.mkdirSync(path.join(tmp, ".config/pi-agent"), { recursive: true });
 
 const cron = await import("../extensions/cron.ts");
@@ -436,6 +438,66 @@ check("next run sees the last result", /without finishing|Checked tun0/.test(pro
   runner.tick(Z("2026-11-05T10:02:05Z"));
   await runner.idle(); await runner.flushOutbox();
   check("tick: deletion announced and remembered", /vpn-check was deleted/.test(posted[posted.length - 1]) && core.readLedger()["vpn-check"]?.gone === true, posted.slice(before));
+}
+
+// Managed routines (machine config, e.g. Ansible): trusted by file owner and
+// mode, not by signature; pi can list and run them but not change them.
+{
+  const mdir = core.managedDir();
+  fs.mkdirSync(mdir, { mode: 0o755 });
+  fs.chmodSync(mdir, 0o755);
+  const put = (name: string, j: any, mode = 0o644) => {
+    const f = path.join(mdir, `${name}.json`);
+    fs.writeFileSync(f, JSON.stringify(j)); fs.chmodSync(f, mode);
+  };
+  put("box-health", { name: "box-health", cron: "4,34 * * * *", prompt: "Check containers.", cwd: realTmp });
+  let m = core.loadManaged();
+  check("managed: loaded with defaults (Denver, default timeout)", m.complete && m.routines.length === 1 && m.routines[0].managed === true &&
+    m.routines[0].tz === "America/Denver" && m.routines[0].timeoutMin === core.TIMEOUT_DEFAULT_MIN, m);
+  put("loose", { name: "loose", cron: "* * * * *", prompt: "x", cwd: realTmp }, 0o666);
+  fs.symlinkSync(path.join(mdir, "box-health.json"), path.join(mdir, "linked.json"));
+  put("misnamed", { name: "other", cron: "* * * * *", prompt: "x", cwd: realTmp });
+  put("badcron", { name: "badcron", cron: "61 * * * *", prompt: "x", cwd: realTmp });
+  m = core.loadManaged();
+  check("managed: writable-by-others, symlinked, misnamed and invalid files ignored",
+    m.routines.length === 1 && ["loose", "linked", "misnamed", "badcron"].every((n) => m.ignored.some((i) => i.includes(`${n}.json`))), m.ignored);
+  for (const n of ["loose", "linked", "misnamed", "badcron"]) fs.unlinkSync(path.join(mdir, `${n}.json`));
+  process.env.PI_ROUTINES_MANAGED_UID = String(process.getuid!() + 1);
+  m = core.loadManaged();
+  check("managed: a folder not owned by the trusted owner is ignored, and deletions aren't recorded", m.routines.length === 0 && !m.complete, m);
+  process.env.PI_ROUTINES_MANAGED_UID = String(process.getuid!());
+  fs.chmodSync(mdir, 0o775);
+  m = core.loadManaged();
+  check("managed: a group-writable folder is ignored", m.routines.length === 0 && !m.complete);
+  fs.chmodSync(mdir, 0o755);
+  // A routine approved in pi under the same name doesn't run.
+  core.saveRoutine({ ...base, name: "box-health", cwd: realTmp, cron: "0 0 1 1 *", created: new Date().toISOString() }, KEY);
+  const all = core.loadAllRoutines(KEY);
+  check("managed wins a name clash", all.routines.filter((r) => r.name === "box-health").length === 1 &&
+    all.routines.find((r) => r.name === "box-health")?.managed === true && all.ignored.some((i) => /name used by a managed routine/.test(i)), all);
+  core.deleteRoutine("box-health");
+  // pi's tools: listed, runnable, not changeable.
+  const f = fakePi();
+  registerRoutines(f.pi, { routineKey: KEY } as any);
+  check("routine_list marks it as machine config", /box-health \[machine config\]/.test(textOf(await f.tools.get("routine_list").execute("1", {}))));
+  const del = await f.tools.get("routine_delete").execute("1", { name: "box-health" }, undefined, undefined, uiCtx(true));
+  check("routine_delete refuses a managed routine", del.isError === true && fs.existsSync(path.join(mdir, "box-health.json")), textOf(del));
+  const cr = await f.tools.get("routine_create").execute("1", { name: "box-health", cron: "5 * * * *", prompt: "x", cwd: realTmp }, undefined, undefined, uiCtx(true));
+  check("routine_create refuses a managed routine's name", cr.isError === true && !core.loadRoutines(KEY).routines.some((r) => r.name === "box-health"), textOf(cr));
+  const rn = await f.tools.get("routine_run").execute("1", { name: "box-health" }, undefined, undefined, uiCtx());
+  check("routine_run works for a managed routine", !rn.isError);
+  fs.unlinkSync(path.join(core.routinesDir(), "box-health.run"));
+  // The runner announces it, and records its removal from the config.
+  const before = posted.length;
+  runner._internals.resetTicks();
+  runner.tick(Z("2026-11-05T11:00:05Z"));
+  await runner.idle(); await runner.flushOutbox();
+  check("tick: managed routine announced as machine config", posted.slice(before).some((m) => /box-health added \(machine config\)/.test(m)), posted.slice(before));
+  fs.unlinkSync(path.join(mdir, "box-health.json"));
+  runner.tick(Z("2026-11-05T11:01:05Z"));
+  await runner.idle(); await runner.flushOutbox();
+  check("tick: managed routine removed from config is announced", posted.slice(before).some((m) => /box-health was deleted/.test(m)), posted.slice(before));
+  fs.rmSync(mdir, { recursive: true });
 }
 
 // The notify command decides delivery: exit 0 is delivered, anything else or

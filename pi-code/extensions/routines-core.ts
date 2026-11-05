@@ -24,7 +24,8 @@ export type Routine = {
   timeoutMin: number;  // a run is stopped after this
   created: string;     // ISO time
 };
-export type SignedRoutine = Routine & { sig: string };
+// `managed`: from the machine's config (Ansible), not approved in pi; see loadManaged.
+export type SignedRoutine = Routine & { sig: string; managed?: boolean };
 
 export type RoutineState = {
   lastStart?: string;
@@ -53,6 +54,17 @@ export const FILE_MAX_BYTES = 64 * 1024;
 
 export function routinesDir(): string {
   return process.env.PI_ROUTINES_DIR || path.join(os.homedir(), ".local/share/pi-routines");
+}
+/** Routines the machine's config (Ansible) puts in place: root-owned files
+ *  that pi, running as the owner, can't write. Their trust is the file
+ *  owner, not a signature, and they change only through the config. */
+export function managedDir(): string {
+  return process.env.PI_ROUTINES_MANAGED_DIR || "/etc/pi-routines";
+}
+/** Owner a managed file must have: root (a test may name its own uid). */
+function managedUid(): number {
+  const u = process.env.PI_ROUTINES_MANAGED_UID;
+  return u !== undefined && /^\d+$/.test(u) ? Number(u) : 0;
 }
 export function stateDir(): string {
   return process.env.PI_ROUTINES_STATE_DIR || path.join(os.homedir(), ".local/state/pi-routines");
@@ -165,6 +177,67 @@ export function loadRoutines(key: string, dir = routinesDir(), ledger: Ledger = 
     } catch (e: any) { ignored.push(`${f} (${e?.message || "unreadable"})`); complete = false; }
   }
   return { routines, ignored, complete };
+}
+
+/** Read a file only if the trusted owner holds it and nobody else can write it. */
+function readTrusted(file: string): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > FILE_MAX_BYTES || st.uid !== managedUid() || (st.mode & 0o022)) return undefined;
+    return fs.readFileSync(fd, "utf8");
+  } catch { return undefined; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* ignore */ } }
+}
+
+/** Managed routines (managedDir): JSON with name, cron, prompt, cwd and
+ *  optionally tz and timeoutMin. The folder and each file must belong to
+ *  root and be writable by nobody else; anything else is ignored. `created`
+ *  is the file's change time, so editing it in the config reads as a change. */
+export function loadManaged(dir = managedDir()): { routines: SignedRoutine[]; ignored: string[]; complete: boolean } {
+  const routines: SignedRoutine[] = [];
+  const ignored: string[] = [];
+  let files: string[];
+  try {
+    const st = fs.lstatSync(dir);
+    if (!st.isDirectory() || st.uid !== managedUid() || (st.mode & 0o022)) {
+      return { routines, ignored: [`${dir} (not a root-owned folder only root can write: managed routines ignored)`], complete: false };
+    }
+    files = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort().slice(0, MAX_FILES);
+  } catch (e: any) {
+    return { routines, ignored, complete: e?.code === "ENOENT" };
+  }
+  for (const f of files) {
+    const file = path.join(dir, f);
+    const raw = readTrusted(file);
+    if (raw === undefined) { ignored.push(`${file} (not a regular root-owned file only root can write)`); continue; }
+    let j: any;
+    try { j = JSON.parse(raw); } catch { ignored.push(`${file} (not JSON)`); continue; }
+    if (!j || typeof j !== "object" || Array.isArray(j)) { ignored.push(`${file} (not an object)`); continue; }
+    let created = "";
+    try { created = fs.statSync(file).mtime.toISOString(); } catch { /* validate reports it */ }
+    const r: SignedRoutine = {
+      name: j.name, cron: typeof j.cron === "string" ? j.cron.trim().split(/\s+/).join(" ") : j.cron,
+      tz: j.tz ?? defaultTimeZone(), prompt: typeof j.prompt === "string" ? j.prompt.trim() : j.prompt, cwd: j.cwd,
+      timeoutMin: j.timeoutMin ?? TIMEOUT_DEFAULT_MIN, created, sig: "", managed: true,
+    };
+    if (`${r.name}.json` !== f) { ignored.push(`${file} (name doesn't match the file)`); continue; }
+    const errs = validate(r, false);
+    if (errs.length) { ignored.push(`${file} (invalid: ${errs.join("; ")})`); continue; }
+    routines.push(r);
+  }
+  return { routines, ignored, complete: true };
+}
+
+/** Every routine that runs: managed ones, then the approved ones from pi (a
+ *  pi routine whose name a managed one uses is ignored). */
+export function loadAllRoutines(key: string, dir = routinesDir(), ledger: Ledger = readLedger(), mdir = managedDir()) {
+  const m = loadManaged(mdir);
+  const u = loadRoutines(key, dir, ledger);
+  const taken = new Set(m.routines.map((r) => r.name));
+  const ignored = [...m.ignored, ...u.ignored];
+  const mine = u.routines.filter((r) => !taken.has(r.name) || (ignored.push(`${r.name}.json (name used by a managed routine)`), false));
+  return { routines: [...m.routines, ...mine], ignored, complete: m.complete && u.complete };
 }
 
 /** Newest version seen per routine name, and which were deleted. Written only

@@ -207,13 +207,18 @@ Per-project notes for future sessions, kept away from Claude Code.
   added, each once per session. No model calls. A note saved mid-session is
   recallable at once and joins the index next session.
 - **Writes:** only through `remember` / `forget`. Checked in code: kebab-case
-  names, size, secret patterns, near-duplicates (the model is told to update
-  the existing note), 60 notes per project. Every save shows a notice; a
-  save in a run that read the web asks you first (headless runs refuse).
+  names, size, secret patterns, 60 notes per project. A note that looks like
+  an existing one gets a warning: the model updates that note, or saves anyway
+  with `distinct: true`. Every save shows a notice. Once the session has read
+  web content (web tools, curl/wget, URLs, `gh issue/pr`), `remember` and
+  `forget` ask you first (headless runs refuse); package installs and your
+  own `!` commands don't count. `/memories confirm off`, or
+  `PI_MEMORY_CONFIRM=0` in `~/.config/pi-agent/env`, turns the asking off;
+  such notes are still marked `agent+web`.
   Updates and `forget` move the old version to `archive/`. Shell and file
   tools are blocked from the folder, and both classifier policies say so.
 - **`/memories`** — `list`, `show <name>`, `forget <name>`,
-  `restore <name>`, `claude on|off`.
+  `restore <name>`, `claude on|off`, `confirm on|off`.
 - **Claude Code's memory** for the same project can be shown read-only (its
   `MEMORY.md` index only) with `PI_CLAUDE_MEMORY=1` in
   `~/.config/pi-agent/env`, or `/memories claude on`. Off by default; pi

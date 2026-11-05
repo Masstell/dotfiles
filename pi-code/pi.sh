@@ -80,20 +80,23 @@ read_env() {
             # shellcheck disable=SC1090
             [[ -f "$f" ]] && { set -a; source "$f"; set +a; }
         done
-        printf 'PI_ARBITER_KEY=%s\nBRAVE_API_KEY=%s\nPI_ARBITER_URL=%s\nPI_CLAUDE_MEMORY=%s\n' \
+        printf 'PI_ARBITER_KEY=%s\nBRAVE_API_KEY=%s\nPI_ARBITER_URL=%s\nPI_CLAUDE_MEMORY=%s\nPI_MEMORY_CONFIRM=%s\n' \
             "${PI_ARBITER_KEY:-${OPENCODE_ARBITER_KEY:-${LLAMA_API_KEY:-}}}" \
             "${BRAVE_API_KEY:-}" \
             "${PI_ARBITER_URL:-${OPENCODE_LLM_URL:-${LLAMA_URL:-}}}" \
-            "${PI_CLAUDE_MEMORY:-}"
+            "${PI_CLAUDE_MEMORY:-}" \
+            "${PI_MEMORY_CONFIRM:-}"
     )
 }
 _env="$(read_env)"
 KEYS="$(grep -E '^(PI_ARBITER_KEY|BRAVE_API_KEY)=' <<<"$_env")"
 _url="$(sed -n 's/^PI_ARBITER_URL=//p' <<<"$_env")"
 [[ -n "$_url" && -z "${PI_ARBITER_URL:-}" ]] && export PI_ARBITER_URL="$_url"
-_cm="$(sed -n 's/^PI_CLAUDE_MEMORY=//p' <<<"$_env")"
-[[ -n "$_cm" && -z "${PI_CLAUDE_MEMORY:-}" ]] && export PI_CLAUDE_MEMORY="$_cm"
-unset _env _url _cm
+for _v in PI_CLAUDE_MEMORY PI_MEMORY_CONFIRM; do
+    _cm="$(sed -n "s/^${_v}=//p" <<<"$_env")"
+    [[ -n "$_cm" && -z "${!_v:-}" ]] && export "$_v=$_cm"
+done
+unset _env _url _cm _v
 if [[ -z "$(sed -n 's/^PI_ARBITER_KEY=//p' <<<"$KEYS")" ]]; then
     echo "pi: no arbiter key. Set PI_ARBITER_KEY in ~/.config/pi-agent/env (Ansible) or ~/.dotfiles/.env." >&2
     exit 1
@@ -300,7 +303,7 @@ for v in HOME USER LOGNAME SHELL PATH LANG LANGUAGE LC_ALL LC_CTYPE TERM \
          COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION TMUX TMUX_PANE EDITOR \
          VISUAL TZ DOCKER_HOST NO_COLOR PI_CODING_AGENT_DIR PI_LOCAL_READONLY PI_LOCAL_POLICY \
          PI_ADVISOR_SWAP_COOLDOWN_S PI_CLASSIFIER_DEADLINE_MS PI_ARBITER_URL \
-         PI_ARBITER_CTX PI_CLAUDE_MEMORY; do
+         PI_ARBITER_CTX PI_CLAUDE_MEMORY PI_MEMORY_CONFIRM; do
     [[ -n "${!v:-}" ]] && args+=(--setenv "$v" "${!v}")
 done
 args+=(

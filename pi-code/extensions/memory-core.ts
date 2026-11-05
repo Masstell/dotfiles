@@ -433,7 +433,7 @@ export function nearDuplicate(cand: { name: string; description: string; keyword
 export type Candidate = { name: string; description: string; keywords: string[]; type: string; content: string };
 
 /** Returns an error message for the model, or undefined when the note may be written. */
-export function checkCandidate(c: Candidate, notes: Note[]): string | undefined {
+export function checkCandidate(c: Candidate, notes: Note[], opts: { allowSimilar?: boolean } = {}): string | undefined {
   if (!NAME_RE.test(c.name)) return "name must be kebab-case: lowercase letters, digits and dashes, at most 60 characters.";
   if (!c.description || /[\n\r]/.test(c.description) || c.description.length > LIMITS.descriptionChars)
     return `description must be one line of at most ${LIMITS.descriptionChars} characters.`;
@@ -449,7 +449,9 @@ export function checkCandidate(c: Candidate, notes: Note[]): string | undefined 
   const exists = notes.some((n) => n.name === c.name);
   if (!exists && notes.length >= LIMITS.notes)
     return `this project already has ${notes.length} notes (limit ${LIMITS.notes}). Merge or forget outdated notes first.`;
-  const dup = exists ? undefined : nearDuplicate(c, notes);
-  if (dup) return `this overlaps the existing note "${dup.name}" (${dup.description}). Update that note by calling remember with name "${dup.name}" and the merged content, or make this one clearly distinct.`;
+  // A warning the model can override: rejecting outright also blocks notes
+  // that share words but record a different fact.
+  const dup = exists || opts.allowSimilar ? undefined : nearDuplicate(c, notes);
+  if (dup) return `this looks similar to the existing note "${dup.name}" (${dup.description}). If it is the same fact, update that note by calling remember with name "${dup.name}" and the merged content. If it is a different fact, call remember again with distinct: true.`;
   return undefined;
 }

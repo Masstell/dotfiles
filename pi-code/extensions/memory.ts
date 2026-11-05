@@ -24,16 +24,18 @@ import {
 } from "./memory-core.ts";
 
 const ON = /^(1|true|yes|on)$/i;
+const OFF = /^(0|false|no|off)$/i;
 const WEB_TOOLS = new Set(["web_fetch", "web_search"]);
-// Commands that bring outside text into the conversation: downloads, URLs,
-// GitHub issue/PR text, package installs (their output and scripts).
+// Commands the agent runs that bring outside text into the conversation:
+// downloads, URLs, GitHub issue/PR text. Package installs and your own `!`
+// commands don't count: nearly every session has them, and asking every time
+// would just be noise.
 const WEB_BASH = new RegExp(
   [
     String.raw`\b(curl|wget|aria2c|lynx|w3m|httpie)\b`,
     String.raw`\bgit\s+clone\b`,
     String.raw`https?://`,
     String.raw`\bgh\s+(issue|pr|api|release|repo\s+view|search|gist)\b`,
-    String.raw`\b(pip3?|uv\s+pip|npm|pnpm|yarn|bun|cargo|go|gem)\s+(install|add|i|get)\b`,
     String.raw`\b(urllib|requests\.get|httpx|fetch\()`,
   ].join("|"),
   "i",
@@ -58,8 +60,15 @@ function resolveToolPath(p: string, cwd: string): string {
 
 export default function registerMemory(pi: any, secrets: Secrets) {
   const g = globalThis as any;
-  g[STASH] ??= { dir: memoryDir(process.cwd()), readOnly: ON.test(process.env.PI_MEMORY_READONLY || "") };
-  const { dir, readOnly } = g[STASH] as { dir: string; readOnly: boolean };
+  g[STASH] ??= {
+    dir: memoryDir(process.cwd()),
+    readOnly: ON.test(process.env.PI_MEMORY_READONLY || ""),
+    // Ask before remember/forget once the session has read web content.
+    // PI_MEMORY_CONFIRM=0 or `/memories confirm off` turns it off.
+    confirm: !OFF.test(process.env.PI_MEMORY_CONFIRM || ""),
+  };
+  const state = g[STASH] as { dir: string; readOnly: boolean; confirm: boolean };
+  const { dir, readOnly } = state;
   // Bash inherits pi's environment; nothing here should point it at memory.
   delete process.env.PI_MEMORY_DIR;
   delete process.env.PI_MEMORY_READONLY;
@@ -95,7 +104,6 @@ export default function registerMemory(pi: any, secrets: Secrets) {
       if (e?.type === "compaction") recalled = new Set();
       const m = e?.message;
       if (m?.role === "toolResult" && WEB_TOOLS.has(String(m.toolName))) webTainted = true;
-      if (m?.role === "bashExecution" && WEB_BASH.test(String(m.command || ""))) webTainted = true;
       if (m?.role === "assistant" && Array.isArray(m.content)) {
         for (const part of m.content) {
           if (part?.type === "toolCall" && part.name === "bash" && WEB_BASH.test(String(part.arguments?.command || ""))) webTainted = true;
@@ -121,11 +129,6 @@ export default function registerMemory(pi: any, secrets: Secrets) {
     }
   });
   pi.on("session_compact", async () => { recalled = new Set(); rebuild(); });
-  // Your own `!cmd` runs land in the conversation too.
-  pi.on("user_bash", async (event: any) => {
-    if (!event?.excludeFromContext && WEB_BASH.test(String(event?.command || ""))) webTainted = true;
-    return undefined;
-  });
 
   // Memory changes only through remember/forget. The folder is writable for
   // this process, so shell and file tools are kept off it. (Unsigned files
@@ -198,6 +201,7 @@ export default function registerMemory(pi: any, secrets: Secrets) {
       keywords: Type.Optional(Type.Array(Type.String(), { description: "Up to 8 short lowercase search terms, including synonyms" })),
       type: Type.String({ description: `One of: ${TYPES.join(", ")}` }),
       content: Type.String({ description: `The note itself, under ${LIMITS.bodyChars} characters. Include the why.` }),
+      distinct: Type.Optional(Type.Boolean({ description: "Set true only after a near-duplicate warning, when this really is a different fact from the similar note" })),
     }),
     async execute(_id: string, params: any, _signal: AbortSignal, _onUpdate: any, ctx: any) {
       const fail = (text: string) => ({ content: [{ type: "text", text: `Not saved: ${text}` }], isError: true, details: { saved: false } });
@@ -211,10 +215,10 @@ export default function registerMemory(pi: any, secrets: Secrets) {
         content: String(params.content || ""),
       };
       const current = notes().notes;
-      const err = checkCandidate(cand, current);
+      const err = checkCandidate(cand, current, { allowSimilar: params.distinct === true });
       if (err) return fail(err);
 
-      if (webTainted) {
+      if (webTainted && state.confirm) {
         const ok = ctx?.hasUI
           ? await ctx.ui.confirm(
               "Save to project memory?",
@@ -249,7 +253,7 @@ export default function registerMemory(pi: any, secrets: Secrets) {
       if (why) return { content: [{ type: "text", text: `Not changed: ${why}` }], isError: true, details: {} };
       const name = String(params.name || "").trim();
       if (!notes().notes.some((n) => n.name === name)) return { content: [{ type: "text", text: `No note named "${name}".` }], isError: true, details: {} };
-      if (webTainted) {
+      if (webTainted && state.confirm) {
         const ok = ctx?.hasUI
           ? await ctx.ui.confirm("Forget a project memory note?", `This session has read web content, so pi asks first.\n\nForget "${name}"? (It is archived; /memories restore brings it back.)`)
           : false;
@@ -262,7 +266,7 @@ export default function registerMemory(pi: any, secrets: Secrets) {
   });
 
   pi.registerCommand("memories", {
-    description: "Project memory: list | show <name> | forget <name> | restore <name> | claude on|off",
+    description: "Project memory: list | show <name> | forget <name> | restore <name> | claude on|off | confirm on|off",
     handler: async (args: string, ctx: any) => {
       const [sub = "", arg = ""] = (args || "").trim().split(/\s+/, 2);
       const say = (t: string, level = "info") => ctx.ui.notify(t, level);
@@ -279,6 +283,7 @@ export default function registerMemory(pi: any, secrets: Secrets) {
           if (!key) lines.push("Memory key missing: notes can't be verified or saved.");
           if (readOnly) lines.push("Read-only in this session.");
           lines.push(`Claude memory: ${claudeOn ? "on" : "off"}`);
+          lines.push(`Confirm after web content: ${state.confirm ? "on" : "off"}`);
           return say(lines.join("\n"));
         }
         case "show": {
@@ -300,8 +305,14 @@ export default function registerMemory(pi: any, secrets: Secrets) {
           const found = claudeOn ? claudeMemoryDir(process.cwd()) : undefined;
           return say(claudeOn ? (found ? `Claude memory on (index from ${found}).` : "Claude memory on, but Claude has no memory for this project.") : "Claude memory off.");
         }
+        case "confirm": {
+          if (arg !== "on" && arg !== "off")
+            return say(`Confirmation is ${state.confirm ? "on" : "off"}: after web content, remember/forget ${state.confirm ? "ask first" : "just notify"}. Use /memories confirm on|off.`);
+          state.confirm = arg === "on";
+          return say(state.confirm ? "Confirmation on: remember/forget ask first once the session has read web content." : "Confirmation off: saves still show a notice, and notes from web sessions are marked agent+web.");
+        }
         default:
-          return say("Usage: /memories [list | show <name> | forget <name> | restore <name> | claude on|off]", "warning");
+          return say("Usage: /memories [list | show <name> | forget <name> | restore <name> | claude on|off | confirm on|off]", "warning");
       }
     },
   });

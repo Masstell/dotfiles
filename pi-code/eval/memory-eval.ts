@@ -149,6 +149,12 @@ for (const [label, cand] of [
   check(`accepts ${label}`, err === undefined, err);
 }
 check("updating an existing name is not a duplicate", checkCandidate({ ...base, name: "deploy-needs-vpn", description: "Deploys to staging fail unless the WireGuard tunnel is up", keywords: ["deploy"] }, notes) === undefined);
+{
+  const similar = { ...base, name: "staging-wireguard", description: "Deploys to staging fail unless the WireGuard tunnel is up", keywords: ["deploy", "staging", "wireguard", "vpn"] };
+  check("near-duplicate warning tells the model how to override", /distinct: true/.test(checkCandidate(similar, notes) || ""));
+  check("near-duplicate check yields to distinct: true", checkCandidate(similar, notes, { allowSimilar: true }) === undefined);
+  check("distinct: true does not skip the secret check", /token|secret|credential/.test(checkCandidate({ ...similar, content: "use k4j9x2m7q1w8e5r3t6y0u2i9o7p4a1s8d" }, notes, { allowSimilar: true }) || ""));
+}
 
 // --- Archive / restore / update ---
 writeNote(dir, { ...seed[2], source: "agent", updated: "2026-11-05T09:00:00.000Z", body: "Updated: vim, with the user's own vimrc." }, KEY);

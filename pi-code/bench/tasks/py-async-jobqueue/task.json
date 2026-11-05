@@ -1,0 +1,6 @@
+{
+  "prompt": "ISSUES.md lists bugs users hit with jobqueue.py under load. Find and fix their causes so JobQueue does what its docstring promises in every case, with many concurrent workers. Hidden stress tests will check it; keep the public API (constructor, submit, run, stop, done, failed, attempts, pending).",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 25,
+  "tags": ["python", "async", "concurrency", "debug", "hard"]
+}

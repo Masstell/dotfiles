@@ -293,6 +293,18 @@ else
     args+=(--ro-bind "$MEMORY_DIR" "$MEMORY_DIR")
 fi
 
+# Undo (extensions/undo.ts): before each prompt, the project's files are
+# snapshotted into a git store of their own under ~/.local/state/pi-undo, never
+# the project's .git. Only a writable project session has one.
+# Print mode (-p: scripts, the bench) has no /undo, so it gets no store.
+UNDO_DIR=""
+_print=0; for _a in "$@"; do [[ "$_a" == -p || "$_a" == --print ]] && _print=1; done
+if [[ "$RW_PROJECT" == 1 && -z "${PI_ROUTINE:-}" && "$_print" == 0 ]]; then
+    UNDO_DIR="${HOME}/.local/state/pi-undo/$(memory_slug "$PROJECT")"
+    mkdir -p -m 700 "${HOME}/.local/state/pi-undo" && mkdir -p -m 700 "$UNDO_DIR"
+    args+=(--bind "$UNDO_DIR" "$UNDO_DIR")
+fi
+
 # Routines (extensions/routines.ts): writable, so an approved routine can be
 # saved from any interactive session; read-only inside a routine run. Files are signed, so one written here by anything
 # but routine_create is ignored by the runner; its state lives in
@@ -355,6 +367,7 @@ for v in HOME USER LOGNAME SHELL PATH LANG LANGUAGE LC_ALL LC_CTYPE TERM \
 done
 args+=(
     --setenv PI_SANDBOX 1
+    --setenv PI_UNDO_DIR "$UNDO_DIR"
     --setenv PI_CODE_DIR "$PI_CODE_DIR"
     --setenv PI_PROJECT_DIR "$([[ "$RW_PROJECT" == 1 ]] && echo "$PROJECT" || echo "none — read-only session")"
     --setenv PI_SECRETS_FD 3

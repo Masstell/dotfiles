@@ -1,0 +1,10 @@
+{
+  "prompt": "Users report that records saved with saveAll in store.js are sometimes missing or broken when loaded right after, and that saving into a folder that doesn't exist \"succeeds\". Find and fix the bug. Tests: node --test.",
+  "check": "node --test",
+  "timeoutMin": 10,
+  "tags": [
+    "javascript",
+    "bugfix",
+    "async"
+  ]
+}

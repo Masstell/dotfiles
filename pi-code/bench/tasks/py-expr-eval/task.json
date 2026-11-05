@@ -1,0 +1,6 @@
+{
+  "prompt": "Implement evaluate() in expr.py exactly as SPEC.md describes. tests/ has only a few examples; your implementation will be checked against many more expressions, including invalid ones, so get every rule in the spec right.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 25,
+  "tags": ["python", "parser", "spec", "hard"]
+}

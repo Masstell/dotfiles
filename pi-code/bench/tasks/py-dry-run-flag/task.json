@@ -1,0 +1,10 @@
+{
+  "prompt": "Add a --dry-run option to cleanup.py: with it, the script prints `would delete <path>` for each file it would remove and removes nothing. Without the flag it behaves exactly as now. Add a test for it next to the existing one.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 10,
+  "tags": [
+    "python",
+    "feature",
+    "cli"
+  ]
+}

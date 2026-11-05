@@ -1,0 +1,6 @@
+{
+  "prompt": "Implement next_fire() in cronnext.py exactly as SPEC.md describes, including the day-of-month/day-of-week rule and daylight-saving changes. It will be checked against a reference on many random expressions, time zones and instants (many near DST changes), plus invalid expressions.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 25,
+  "tags": ["python", "time", "spec", "hard"]
+}

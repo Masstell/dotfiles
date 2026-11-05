@@ -1,0 +1,9 @@
+{
+  "prompt": "Make Cache in cache.js a least-recently-used cache: once it holds more than maxSize entries, the least recently used entry is evicted. get() of an existing key counts as a use; set() of an existing key updates the value and counts as a use. Add a `size` getter. Keep the existing API working. Tests: node --test.",
+  "check": "node --test",
+  "timeoutMin": 10,
+  "tags": [
+    "javascript",
+    "feature"
+  ]
+}

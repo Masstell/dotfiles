@@ -1,0 +1,10 @@
+{
+  "prompt": "tests/test_stock.py has a failing test: reserving more than is in stock must raise ValueError. Fix stock.py so all of its rules hold (read its docstring) without breaking the other tests.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 10,
+  "tags": [
+    "python",
+    "bugfix",
+    "regression"
+  ]
+}

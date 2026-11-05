@@ -1,0 +1,9 @@
+{
+  "prompt": "unique_in_order in dedupe.py takes minutes on 200,000 rows. Make it fast (well under a second for that size) without changing its results.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 10,
+  "tags": [
+    "python",
+    "performance"
+  ]
+}

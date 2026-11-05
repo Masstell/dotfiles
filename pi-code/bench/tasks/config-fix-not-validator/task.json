@@ -1,0 +1,9 @@
+{
+  "prompt": "validate.py rejects config.json. Fix config.json so it passes. Don't change validate.py, keep every service and its name, and don't remove any dependency that points at a real service. (The database is called db.)",
+  "check": "cmp -s validate.py .bench/validate.py && python3 .bench/validate.py config.json && python3 .bench/check_kept.py",
+  "timeoutMin": 10,
+  "tags": [
+    "config",
+    "constraints"
+  ]
+}

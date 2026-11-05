@@ -1,0 +1,9 @@
+{
+  "prompt": "Implement slugify in slug.py exactly as SPEC.md describes. The tests in tests/ cover only part of the spec.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 10,
+  "tags": [
+    "python",
+    "spec"
+  ]
+}

@@ -26,6 +26,8 @@ pi-code/
 │   ├── ask-user.ts            ask_user tool (a question with choices)
 │   ├── plan-mode.ts           /plan: investigate and plan, no file changes
 │   ├── subagent.ts            subagent tool: parallel workers with their own context
+│   ├── todo.ts                todo_write tool: a visible task checklist; /todos
+│   ├── undo.ts                snapshot the project before each prompt; /undo
 │   ├── schedule.ts            cron_create / schedule_wakeup: prompts on a schedule in this session
 │   ├── routines.ts            routine_create/list/delete/run, /routines; notify inside a run
 │   ├── routines-core.ts       routine files: validation, signing, state, the run prompt
@@ -33,6 +35,9 @@ pi-code/
 ├── routines/
 │   ├── runner.ts              the pi-routines service: fires due routines, sends alerts
 │   └── pi-routines.sh         starts it with pi's TypeScript loader (systemd, Ansible)
+├── bench/
+│   ├── bench.ts / bench.sh    coding bench: pi solves synthetic tasks, hidden tests grade
+│   └── tasks/<id>/            task.json, repo/ (pi's start), hidden/ (grading), solution/
 ├── policy/
 │   ├── bash-safety-sandbox.md classifier policy inside the sandbox (default)
 │   ├── bash-safety.md         classifier policy without it (PI_NOSANDBOX=1)
@@ -272,6 +277,28 @@ Per-project notes for future sessions, kept away from Claude Code.
   - Web content a worker read counts as web content for this session's memory
     confirmation. A worker times out after 20 minutes (`PI_SUBAGENT_TIMEOUT_S`).
 
+- **Task list** (`todo.ts`): for work with 3 or more steps, the model writes
+  its plan as a checklist with `todo_write` and ticks it off as it goes; you
+  see it above the input (`☐` to do, `◐` in progress, `☑` done; it folds to
+  one line when everything is done). One item is in progress at a time. The
+  list is kept in the session, so `/tree`, `/fork` and `/resume` show the
+  list as it was at that point. `/todos` prints it.
+- **Undo** (`undo.ts`): before each prompt you send, pi snapshots the
+  project's files; `/undo` lists your recent prompts and puts the files back
+  as they were before the one you pick, after showing which files change.
+  - It catches every change, by edit, write, bash or a worker, and works in
+    folders that aren't git repos. Files your `.gitignore` lists are left
+    alone. The conversation isn't rewound (`/tree` does that); the model is
+    told which files the undo changed.
+  - The state just before an undo becomes a checkpoint too, so `/undo`
+    again brings the changes back.
+  - Snapshots live in a git store of their own,
+    `~/.local/state/pi-undo/<project>`, never in the project's `.git`. The
+    agent can write that store, so undo's git calls ignore its config and
+    hooks (nothing planted there runs), and a restore only writes inside the
+    project. Off for projects over 20,000 files or 500 MB, for read-only
+    sessions and in print mode.
+
 ## Scheduling and routines
 
 Like Claude Code, pi can do things on a schedule when you ask in plain words;
@@ -355,9 +382,52 @@ cd eval
 ./run-eval.sh --offline    # detection invariants only, no model
 ./run-eval.sh --only=92,107
 ./memory-eval.sh           # project memory: recall, restraint, write checks (offline)
-./workflow-eval.sh         # plan-mode allowlist, lint on real files (offline)
+./workflow-eval.sh         # plan-mode allowlist, lint on real files, task list, undo (offline)
 ./routines-eval.sh         # cron, scheduling, routine signing, the runner end to end (offline)
 ```
+
+`workflow-eval.sh` also covers the task list and undo (a real restore,
+ignored files, the project's `.git` left alone, a planted fsmonitor/hook
+that must not run).
+
+### Coding bench
+
+The evals above test the harness; the bench tests pi as a coder: 21
+synthetic tasks (Python, JavaScript, bash, a config file) that pi does
+unattended, the real way (`pi.sh -p`: sandbox, classifier, the local model),
+each in a throwaway git repo under `~/pi-bench/runs/`. Then tests pi never
+saw are copied in, replacing any it edited, and decide pass or fail.
+
+```bash
+cd bench
+./bench.sh --selftest      # no model: each task fails as given, passes with its solution
+./bench.sh                 # every task once (tens of minutes; the arbiter is shared)
+./bench.sh --tag hard      # only the 7 hard, fuzz-graded tasks
+./bench.sh --parallel 2 --repeat 3 --only py-pagination,bash-spaces
+./bench.sh --list
+```
+
+It prints pass/fail, time and tool calls per task, the score, and the
+previous run's results for comparison; whether pi kept a task list on the
+multi-step task; and the folder with each run's git diff. Results are JSON in
+`~/pi-bench/results/`. Run it before and after changing a prompt, an
+extension, the model or pi itself; local models vary run to run, so use
+`--repeat` before trusting a small difference.
+
+Seven tasks are tagged `hard`: an expression evaluator, an interval set, cron
+with daylight saving, an EventEmitter clone, JSON Patch, a mini SQL engine,
+and an async job queue with three concurrency bugs. They're graded by
+fuzzing against a reference: thousands of random inputs compared with a
+hidden implementation, and with Node's own `events` and with SQLite where
+those exist. Getting nearly every edge case right still fails, so a capable
+model has room to score lower or higher.
+
+The 14 everyday tasks cover: a bug from a failing test, a feature with a CLI flag, a
+rename across files with a deprecated alias, a crash from a traceback, an
+implementation from a spec, a missing `await`, an LRU cache, bash quoting, a
+behaviour-preserving refactor, an O(n²) slowdown, a four-part multi-step
+feature, fixing a config without touching its validator, a bug report with
+no tests, and a fix that mustn't break the other rules.
 
 `run-eval.ts` imports `extensions/classifier-core.ts`, so it runs the exact
 code the hook runs — the old Python mirror drifted from the extension more

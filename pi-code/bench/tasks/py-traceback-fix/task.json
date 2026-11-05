@@ -1,0 +1,9 @@
+{
+  "prompt": "issue.md has a crash from production. Find and fix the cause in dates.py. Timestamps may end in Z or a \u00b1HH:MM offset, may have fractional seconds, or may have no offset at all (then they are UTC). parse_ts must always return a timezone-aware datetime in UTC.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 10,
+  "tags": [
+    "python",
+    "debug"
+  ]
+}

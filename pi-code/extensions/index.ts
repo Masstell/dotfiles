@@ -11,6 +11,8 @@
 //   ask-user          ask_user tool: a question with choices, when a decision is yours
 //   plan-mode         /plan: investigate and plan with no file changes
 //   subagent          subagent tool: up to 3 parallel workers with their own context
+//   schedule          cron_create / schedule_wakeup: prompts on a schedule in this session
+//   routines          routine_create: scheduled unattended runs that survive restarts; notify
 
 import registerArbiter from "./arbiter-provider.ts";
 import registerClassifier from "./bash-classifier.ts";
@@ -21,6 +23,8 @@ import registerLint from "./lint.ts";
 import registerAskUser from "./ask-user.ts";
 import registerPlanMode from "./plan-mode.ts";
 import registerSubagent from "./subagent.ts";
+import registerSchedule from "./schedule.ts";
+import registerRoutines from "./routines.ts";
 import { readSecrets } from "./secrets.ts";
 
 export default async function (pi: any) {
@@ -46,8 +50,9 @@ export default async function (pi: any) {
     ["memory", registerMemory],
     ["lint", registerLint],
     ["subagent", registerSubagent],
-    // Workers run headless: nobody to ask.
-    ...(process.env.PI_SUBAGENT ? [] : ([["ask_user", registerAskUser]] as const)),
+    ["routines", registerRoutines],
+    // Workers and routine runs are headless: nobody to ask, nothing to schedule into.
+    ...(process.env.PI_SUBAGENT || process.env.PI_ROUTINE ? [] : ([["ask_user", registerAskUser], ["schedule", registerSchedule]] as const)),
   ] as const) {
     try {
       await register(pi, secrets);

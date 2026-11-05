@@ -35,7 +35,8 @@ const DEADLINE_MS = Number(process.env.PI_CLASSIFIER_DEADLINE_MS || "") || 660_0
 async function classify(command: string, cwd: string, scan: { files: any[] }, key: string, ctx: any): Promise<Verdict> {
   if (!key) return { decision: "block", reason: "classifier not configured (no arbiter key)" };
   if (POLICY === null) return { decision: "block", reason: `policy file unreadable: ${POLICY_PATH} (failing closed)` };
-  const content = userContent(command, cwd, scan.files, CLAUDE_MODE, process.env.PI_PROJECT_DIR || "");
+  const extra = (process.env.PI_EXTRA_RW || "").split(":").filter(Boolean);
+  const content = userContent(command, cwd, scan.files, CLAUDE_MODE, process.env.PI_PROJECT_DIR || "", extra);
   try {
     const res = await chat(requestBody(POLICY, content, CLAUDE_MODE), {
       key,

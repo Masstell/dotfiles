@@ -40,6 +40,7 @@ type Case = {
   id: number; category: string; cmd: string; cwd?: string; expect: "allow" | "block";
   sandbox?: "allow" | "block" | "soft"; critical?: boolean; soft?: boolean;
   no_fast?: boolean; must_read?: string; must_not_read?: string; must_inline?: boolean; note?: string;
+  project?: string; extra?: string[]; // writable project / folders the owner added, as the classifier is told
 };
 
 const sub = (s: string) => s.replaceAll("{FIX}", FIX);
@@ -75,7 +76,7 @@ async function decide(c: Case): Promise<{ got: "allow" | "block"; path: string; 
   if (scan.block) return { got: "block", path: "scan", reason: scan.block, dt: 0 };
   if (OFFLINE) return { got: "allow", path: "skipped", reason: `would ask the model${read.size ? ` with ${[...read].join(", ")}` : ""}`, dt: 0 };
   const t = Date.now();
-  const res = await chat(requestBody(POLICY!, userContent(cmd, cwd, scan.files, CLAUDE), CLAUDE), { key: KEY, deadlineMs: DEADLINE_MS });
+  const res = await chat(requestBody(POLICY!, userContent(cmd, cwd, scan.files, CLAUDE, c.project ? sub(c.project) : "", (c.extra || []).map(sub)), CLAUDE), { key: KEY, deadlineMs: DEADLINE_MS });
   const dt = (Date.now() - t) / 1000;
   if (!res.ok) return { got: "block", path: "error", reason: `HTTP ${res.status} ${res.code}`, dt };
   const v = parseVerdict(res.text, CLAUDE);

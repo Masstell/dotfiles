@@ -8,9 +8,10 @@
 // Each minute: routines whose cron matches (in their own time zone), plus any
 // asked to run now (<name>.run, at most once per RUN_NOW_GAP), are started —
 // at most MAX_PARALLEL at once (the arbiter is shared), never two runs of one
-// routine. A run's notify calls go to Matrix as one message; so does a run
-// that fails to finish (once, until one finishes again), and any routine that
-// appears, disappears or is refused. Minutes missed while the VM was down are
+// routine. A run's notify calls reach the owner as one message (through the
+// machine's notify command, below); so does a run that fails to finish (once,
+// until one finishes again), and any routine that appears, disappears or is
+// refused. Minutes missed while the VM was down are
 // not made up. Around DST changes it behaves like cron: a job pinned to an
 // hour runs once when the clock falls back, and one skipped when it springs
 // forward runs right after the gap.
@@ -32,8 +33,6 @@ const MAX_PARALLEL = Math.max(1, Math.min(4, Number(process.env.PI_ROUTINES_MAX 
 // This repo's launcher by absolute path: not whatever `pi` PATH finds.
 const PI = process.env.PI_LAUNCHER || path.resolve(HERE, "../pi.sh");
 const KEY_FILE = path.join(HOME, ".config/pi-agent/routine.key");
-const MATRIX_ENV = path.join(HOME, ".config/pi-agent/matrix.env");
-const MATRIX_TOKEN = path.join(HOME, ".config/pi-agent/matrix.token");
 const RUN_NOW_GAP_MS = 5 * 60_000;
 const POSTS_PER_HOUR = 6;
 const BODY_MAX = 3000;
@@ -64,7 +63,7 @@ export function foldEvent(r: RunResult, line: string) {
   }
 }
 
-/** Defuse Matrix mentions (@room, @user:server) in text a run produced. */
+/** Defuse chat mentions (@room, @user:server) in text a run produced. */
 export function defuse(t: string): string {
   return t.replace(/@/g, "@​");
 }
@@ -101,67 +100,48 @@ function killTree(pid: number, sig: NodeJS.Signals) {
   return order;
 }
 
-// ---------------------------------------------------------------- Matrix
+// ---------------------------------------------------------------- delivery
+// The runner doesn't know where alerts go. It hands each message, on stdin,
+// to the notify command: the executable at PI_ROUTINES_NOTIFY, or
+// ~/.config/pi-agent/notify. Exit 0 means delivered. Whatever sends it —
+// chat, push, mail — is the machine's config (Ansible), not this repo's.
+// With no command, messages are logged and wait in the outbox.
 
-function readEnvFile(file: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const line of (readRegular(file) || "").split("\n")) {
-    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/);
-    if (m) out[m[1]] = m[2].replace(/^(['"])(.*)\1$/, "$2");
-  }
-  return out;
-}
+const NOTIFY_TIMEOUT_MS = 30_000;
+const notifyCmd = () => process.env.PI_ROUTINES_NOTIFY || path.join(HOME, ".config/pi-agent/notify");
 
-async function mx(base: string, method: string, p: string, body?: unknown, token?: string): Promise<{ status: number; json: any }> {
-  const res = await fetch(`${base}/_matrix/client/v3${p}`, {
-    method, signal: AbortSignal.timeout(20_000),
-    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  let json: any = {};
-  try { json = await res.json(); } catch { /* empty */ }
-  return { status: res.status, json };
-}
-
-let txn = 0;
 let posting = 0;
-/** Post one message; false if it didn't go out (not configured, or Matrix failed). */
-export async function postMatrix(body: string): Promise<boolean> {
-  const env = readEnvFile(MATRIX_ENV);
-  const base = (env.MATRIX_HOMESERVER || "").replace(/\/+$/, "");
-  if (!base || !env.MATRIX_USER || !env.MATRIX_PASSWORD || !env.MATRIX_ROOM) {
-    log("matrix: not configured (", MATRIX_ENV, ") — message only logged:", body);
+/** Deliver one message; false if it didn't go out (no command, or it failed). */
+export async function deliver(body: string): Promise<boolean> {
+  const cmd = notifyCmd();
+  try { fs.accessSync(cmd, fs.constants.X_OK); } catch {
+    log(`notify: no notify command (${cmd}) — message only logged:`, body);
     return false;
   }
   body = body.length > BODY_MAX ? `${body.slice(0, BODY_MAX)}…` : body;
   posting++;
-  const login = async (): Promise<string> => {
-    const r = await mx(base, "POST", "/login", {
-      type: "m.login.password", identifier: { type: "m.id.user", user: env.MATRIX_USER }, password: env.MATRIX_PASSWORD,
-      device_id: `pi-routines-${HOST}`, initial_device_display_name: `pi routines on ${HOST}`,
-    });
-    if (r.status !== 200 || !r.json.access_token) throw new Error(`login failed (${r.status} ${r.json.errcode || ""})`);
-    fs.writeFileSync(MATRIX_TOKEN, r.json.access_token, { mode: 0o600 });
-    return r.json.access_token;
-  };
   try {
-    let token = (readRegular(MATRIX_TOKEN) || "").trim();
-    if (!token) token = await login();
-    let room = env.MATRIX_ROOM;
-    if (room.startsWith("#")) {
-      const r = await mx(base, "GET", `/directory/room/${encodeURIComponent(room)}`, undefined, token);
-      if (r.json.room_id) room = r.json.room_id;
-    }
-    const send = (t: string) => mx(base, "PUT",
-      `/rooms/${encodeURIComponent(room)}/send/m.room.message/pi${Date.now()}-${txn++}`, { msgtype: "m.text", body }, t);
-    let r = await send(token);
-    if (r.status === 401) { token = await login(); r = await send(token); }
-    if (r.status === 403) { await mx(base, "POST", `/join/${encodeURIComponent(room)}`, {}, token); r = await send(token); }
-    if (r.status !== 200) throw new Error(`send failed (${r.status} ${r.json.errcode || ""})`);
-    return true;
-  } catch (e: any) {
-    log("matrix:", e.message, "— message:", body);
-    return false;
+    return await new Promise<boolean>((resolve) => {
+      let err = "";
+      let done = false;
+      const finish = (ok: boolean, why?: string) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (!ok) log(`notify: ${why}${err.trim() ? `: ${err.trim().slice(0, 500)}` : ""} — message:`, body);
+        resolve(ok);
+      };
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(cmd, [], { stdio: ["pipe", "ignore", "pipe"], env: { ...process.env, PI_ROUTINES_HOST: HOST } });
+      } catch (e: any) { finish(false, e.message); return; }
+      const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } finish(false, "timed out"); }, NOTIFY_TIMEOUT_MS);
+      child.stderr!.on("data", (d) => { if (err.length < 2000) err += d; });
+      child.on("error", (e) => finish(false, e.message));
+      child.on("close", (code) => finish(code === 0, `exited with ${code}`));
+      child.stdin!.on("error", () => { /* reported by close */ });
+      child.stdin!.end(body);
+    });
   } finally {
     posting--;
   }
@@ -169,7 +149,7 @@ export async function postMatrix(body: string): Promise<boolean> {
 
 // ---------------------------------------------------------------- outbox
 // Messages that must not be lost (a failure, a recovery, a routine change)
-// wait here until Matrix takes them, retried every tick. A failure counts as
+// wait here until the notify command takes them, retried every tick. A failure counts as
 // told (state.failing) only once its message went out.
 
 type OutMsg = { id: string; text: string; routine?: string; kind?: string };
@@ -205,7 +185,7 @@ export async function flushOutbox() {
     for (;;) {
       const next = readOutbox()[0];
       if (!next) break;
-      if (!(await postMatrix(next.text))) break;
+      if (!(await deliver(next.text))) break;
       // Remove it by id from the file as it is now, not from a stale copy.
       let still = false;
       editOutbox((o) => { still = o.some((m) => m.id === next.id); return o.filter((m) => m.id !== next.id); });
@@ -264,7 +244,7 @@ export function run(r: SignedRoutine): Promise<void> {
           const rl = rateLimited(state, m.text, Date.now());
           state = { ...state, posts: rl.posts };
           if (!rl.text) log(`run ${r.name}: notify muted (rate limit): ${m.text}`);
-          else if (!(await postMatrix(rl.text))) log(`run ${r.name}: notify not delivered`);
+          else if (!(await deliver(rl.text))) log(`run ${r.name}: notify not delivered`);
         } else {
           enqueue(m.text, r.name, m.kind);
         }

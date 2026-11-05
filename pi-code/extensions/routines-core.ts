@@ -37,7 +37,7 @@ export type RoutineState = {
   failing?: boolean;         // runs keep failing and the owner has been told; cleared once told it recovered
   lastWall?: string;         // "<tz>|<wall minute>" of the last scheduled start (DST: never twice per minute)
   lastRequested?: string;    // last run-now request honoured
-  posts?: string[];          // ISO times of recent Matrix posts (rate limit)
+  posts?: string[];          // ISO times of recent alerts sent (rate limit)
 };
 
 export const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;

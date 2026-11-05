@@ -4,7 +4,8 @@
 // and pi proposes a routine; you approve it on screen; the pi-routines
 // service on this VM (Ansible) runs it from then on, each run a fresh,
 // sandboxed, classifier-gated pi. A run reports through the notify tool, and
-// the service posts that to Matrix; silence means all is as expected.
+// the service hands that to the machine's notify command (whatever channel
+// the owner set up); silence means all is as expected.
 //
 // A routine runs unattended, forever, so creating or changing one needs the
 // human: only an interactive session can, after an on-screen yes. Subagents,
@@ -61,7 +62,7 @@ export default function registerRoutines(pi: any, secrets: Secrets) {
       name: "notify",
       label: "Notify owner",
       description:
-        "Send the owner a short message (Matrix, their phone). Use it only when something needs their attention: " +
+        "Send the owner a short message (it reaches their phone). Use it only when something needs their attention: " +
         "newly broken, recovered, or the check could not be done. Not for 'all fine'.",
       promptSnippet: "Notify the owner when something needs their attention",
       parameters: Type.Object({ message: Type.String({ description: "Under 300 characters: what, where, what you did" }) }),
@@ -81,7 +82,7 @@ export default function registerRoutines(pi: any, secrets: Secrets) {
     description:
       "Create or replace a routine: a pi run that fires on a cron schedule on this VM with nobody watching, and keeps " +
       "running across pi restarts and reboots (unlike cron_create, which lives only in this session). Each run is a " +
-      "fresh pi in the sandbox with the usual classifier; it may fix what it finds, and it tells the owner (Matrix) only " +
+      "fresh pi in the sandbox with the usual classifier; it may fix what it finds, and it tells the owner only " +
       "when something needs attention. The owner must approve it on screen. Cron is 5-field, read in " +
       `${defaultTimeZone()}.`,
     promptSnippet: "Create a scheduled routine that runs unattended and survives restarts",
@@ -135,8 +136,8 @@ export default function registerRoutines(pi: any, secrets: Secrets) {
       if (!ok) return text("The owner declined. The routine was not saved; ask what they'd like changed.", true);
       try { saveRoutine(r, key); } catch (e: any) { return text(`Could not save: ${e.message}`, true); }
       return text(`Routine "${r.name}" ${replacing ? "replaced" : "created"}. Next run: ${nextText(r)}. ` +
-        "The pi-routines service on this VM runs it; results that need attention go to Matrix. " +
-        `Tell the owner: within a minute the "pi routines" room shows "routine ${r.name} ${replacing ? "changed" : "added"}" — ` +
+        "The pi-routines service on this VM runs it; results that need attention are sent to the owner. " +
+        `Tell the owner: within a minute they get "routine ${r.name} ${replacing ? "changed" : "added"}" — ` +
         "that confirms the service took this version; if it doesn't appear, something else replaced it. " +
         "routine_list shows its last result.");
     },

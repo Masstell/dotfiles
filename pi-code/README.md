@@ -5,7 +5,7 @@ for Claude Code: pi on the arbiter's default model, inside a bubblewrap
 sandbox, with a bash classifier we own, an advisor for second opinions, web
 search, per-project memory that stays private to the local model, and
 workflow tools: lint feedback, `ask_user`, plan mode, parallel subagents,
-and scheduling: in-session jobs and unattended routines that report to Matrix.
+and scheduling: in-session jobs and unattended routines that report to you.
 
 ```
 pi-code/
@@ -31,7 +31,7 @@ pi-code/
 │   ├── routines-core.ts       routine files: validation, signing, state, the run prompt
 │   └── cron.ts                5-field cron in a named time zone (shared with the runner)
 ├── routines/
-│   ├── runner.ts              the pi-routines service: fires due routines, posts to Matrix
+│   ├── runner.ts              the pi-routines service: fires due routines, sends alerts
 │   └── pi-routines.sh         starts it with pi's TypeScript loader (systemd, Ansible)
 ├── policy/
 │   ├── bash-safety-sandbox.md classifier policy inside the sandbox (default)
@@ -306,8 +306,8 @@ or "look again in 10 minutes":
   a dotfiles update changes its code.
 - Each run is told what the previous run found, so it can tell "newly broken"
   from "still broken". It calls `notify` only when something needs you
-  (broken, recovered, or it couldn't check); the service posts that to the
-  "pi routines" Matrix room as @pi. A run that fails to finish (timeout,
+  (broken, recovered, or it couldn't check); the service sends that through
+  the notify command (below). A run that fails to finish (timeout,
   arbiter down, pi error) is posted once, and again when runs work again.
   Silence means all is as expected.
 - `routine_list` (or `/routines`) shows each routine's schedule, next run and
@@ -326,7 +326,7 @@ or "look again in 10 minutes":
     The runner ignores unsigned files, and keeps a ledger
     (`~/.local/state/pi-routines/ledger.json`) so an older signed version
     written back, or a deleted routine restored, is refused too.
-  - The room hears every change: a routine added, changed or deleted, and
+  - You hear about every change: a routine added, changed or deleted, and
     files refused (at most hourly). After you approve one, its "added" or
     "changed" message is your confirmation the service took that version.
   - A run's writable project is exactly the directory you approved (resolved
@@ -336,9 +336,13 @@ or "look again in 10 minutes":
   - Limits: 5 notify messages per run, 6 posts per routine per hour, a run
     at most every 5 minutes on request; the previous run's output reaches the
     next run capped and quoted as data.
-  - The Matrix login (`~/.config/pi-agent/matrix.env`, from Ansible) is
-    read only by the service, outside the sandbox. Failure and recovery
-    messages wait in an outbox until Matrix takes them.
+- Where alerts go is the machine's choice, not this repo's: the service
+  pipes each message to the notify command, `$PI_ROUTINES_NOTIFY` or else
+  `~/.config/pi-agent/notify` (hidden from the sandbox), and exit 0 means
+  delivered. Any executable that reads a message on stdin works (a chat bot,
+  ntfy, mail); the homelab's Ansible installs one. Without one, alerts are
+  only logged. Failure and recovery messages wait in an outbox until the
+  command takes them.
 - Logs: `journalctl -u pi-routines`. State per routine:
   `~/.local/state/pi-routines/<name>.json` (read-only inside the sandbox).
 

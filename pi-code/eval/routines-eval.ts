@@ -1,7 +1,7 @@
 // Offline tests for scheduling (schedule.ts), routines (routines.ts,
 // routines-core.ts, cron.ts) and the routine runner (routines/runner.ts).
 // No model calls: the runner is pointed at a fake pi launcher and a fake
-// Matrix server. Run: ./routines-eval.sh
+// notify command. Run: ./routines-eval.sh
 
 import fs from "node:fs";
 import http from "node:http";
@@ -260,29 +260,25 @@ const noUiCtx = { hasUI: false, isIdle: () => true, hasPendingMessages: () => fa
 }
 
 // ------------------------------------------------------------------ runner
-// A fake Matrix server and a fake pi launcher, then real runs.
+// A fake alert channel (the notify command posts to a local server) and a
+// fake pi launcher, then real runs.
 const posted: string[] = [];
-let logins = 0;
-let matrixDown = false;
+let notifyDown = false;
 const server = http.createServer((req, res) => {
   let body = "";
   req.on("data", (d) => (body += d));
   req.on("end", () => {
-    res.setHeader("content-type", "application/json");
-    if (matrixDown) { res.statusCode = 502; res.end("{}"); return; }
-    if (req.url?.endsWith("/login")) { logins++; res.end(JSON.stringify({ access_token: "tok" })); return; }
-    if (req.url?.includes("/send/m.room.message/")) {
-      if (req.headers.authorization !== "Bearer tok") { res.statusCode = 401; res.end("{}"); return; }
-      posted.push(JSON.parse(body).body); res.end(JSON.stringify({ event_id: "$1" })); return;
-    }
-    res.statusCode = 404; res.end("{}");
+    if (notifyDown) { res.statusCode = 502; res.end(); return; }
+    posted.push(body); res.end();
   });
 });
 await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
 const port = (server.address() as any).port;
-fs.writeFileSync(path.join(tmp, ".config/pi-agent/matrix.env"),
-  `MATRIX_HOMESERVER=http://127.0.0.1:${port}\nMATRIX_USER=pi\nMATRIX_PASSWORD=pw\nMATRIX_ROOM=!room:test\n`);
-fs.writeFileSync(path.join(tmp, ".config/pi-agent/matrix.token"), "stale");
+const notifyCmd = path.join(tmp, ".config/pi-agent/notify");
+fs.writeFileSync(notifyCmd, `#!/usr/bin/env bash
+[[ -n "$PI_ROUTINES_HOST" ]] || exit 9
+exec curl -fsS --data-binary @- http://127.0.0.1:${port}/
+`, { mode: 0o755 });
 fs.writeFileSync(path.join(tmp, ".config/pi-agent/routine.key"), KEY);
 const fake = path.join(tmp, "fake-pi");
 fs.writeFileSync(fake, `#!/usr/bin/env bash
@@ -355,8 +351,8 @@ await runner.run(rr("OK"));
 let st = core.readState("vpn-check");
 check("healthy run: state saved, nothing posted", st.lastOk === true && st.lastSummary === "Checked tun0." && posted.length === 0, { st, posted });
 await runner.run(rr("BROKEN"));
-check("broken: the run's notify is posted, mention defused (stale token re-logged in)",
-  posted.length === 1 && /vpn-check: VPN is down/.test(posted[0]) && !/@room/.test(posted[0]) && logins === 1, posted);
+check("broken: the run's notify is sent, mention defused",
+  posted.length === 1 && /vpn-check: VPN is down/.test(posted[0]) && !/@room/.test(posted[0]), posted);
 await runner.run(rr("SPAM"));
 st = core.readState("vpn-check");
 check("300 notify calls: 5 kept, one post", st.lastNotified?.length === 5 && posted.length === 2, { n: st.lastNotified?.length, posted: posted.length });
@@ -369,21 +365,21 @@ await runner.run(rr("FAIL"));
 check("fails again: no second alert", posted.length === 3, posted);
 await runner.run(rr("OK"));
 check("recovers: 'running again' posted once", posted.length === 4 && /running again/.test(posted[3]) && core.readState("vpn-check").failing === false, posted);
-// Matrix down when a run fails: the alert waits, and failing isn't set until it went out.
-matrixDown = true;
+// Alert channel down when a run fails: the alert waits, and failing isn't set until it went out.
+notifyDown = true;
 await runner.run(rr("FAIL"));
-check("Matrix down: failure alert kept in the outbox, not marked told", outbox().length === 1 && core.readState("vpn-check").failing === false, outbox());
+check("channel down: failure alert kept in the outbox, not marked told", outbox().length === 1 && core.readState("vpn-check").failing === false, outbox());
 await runner.run(rr("FAIL"));
 check("still down: not queued twice", outbox().length === 1);
-matrixDown = false;
+notifyDown = false;
 await runner.flushOutbox();
-check("Matrix back: the alert goes out, now marked told", posted.length === 5 && /could not run/.test(posted[4]) && core.readState("vpn-check").failing === true && outbox().length === 0, posted);
+check("channel back: the alert goes out, now marked told", posted.length === 5 && /could not run/.test(posted[4]) && core.readState("vpn-check").failing === true && outbox().length === 0, posted);
 await runner.run(rr("OK"));
 check("then recovery posted", posted.length === 6 && /running again/.test(posted[5]));
-matrixDown = true;
+notifyDown = true;
 await runner.run(rr("FAIL"));
 await runner.run(rr("OK"));
-matrixDown = false;
+notifyDown = false;
 await runner.flushOutbox();
 check("a failure alert made stale by a good run is dropped", posted.length === 6 && outbox().length === 0, { posted: posted.slice(6), outbox: outbox() });
 await runner.run(rr("OK", { cwd: path.join(tmp, "gone") }));
@@ -398,9 +394,9 @@ check("next run sees the last result", /without finishing|Checked tun0/.test(pro
 {
   // A message queued while a flush is posting isn't lost.
   await runner.run(rr("OK")); await runner.flushOutbox();      // vpn-check healthy, told
-  matrixDown = true;
-  await runner.run(rr("FAIL"));                                 // queued: Matrix down
-  matrixDown = false;
+  notifyDown = true;
+  await runner.run(rr("FAIL"));                                 // queued: channel down
+  notifyDown = false;
   const before = posted.length;
   const flush = runner.flushOutbox();                           // posting vpn-check's failure...
   await runner.run(rr("FAIL", { name: "other" }));              // ...while another routine queues one
@@ -440,6 +436,22 @@ check("next run sees the last result", /without finishing|Checked tun0/.test(pro
   runner.tick(Z("2026-11-05T10:02:05Z"));
   await runner.idle(); await runner.flushOutbox();
   check("tick: deletion announced and remembered", /vpn-check was deleted/.test(posted[posted.length - 1]) && core.readLedger()["vpn-check"]?.gone === true, posted.slice(before));
+}
+
+// The notify command decides delivery: exit 0 is delivered, anything else or
+// no command at all is not (the message stays queued).
+{
+  check("deliver: command exit 0 is delivered", await runner.deliver("hello") === true && posted[posted.length - 1] === "hello");
+  notifyDown = true;
+  check("deliver: command failure is not delivered", await runner.deliver("x") === false);
+  notifyDown = false;
+  process.env.PI_ROUTINES_NOTIFY = path.join(tmp, "no-such-notify");
+  check("deliver: no command, not delivered", await runner.deliver("x") === false);
+  const hang = path.join(tmp, "hang-notify");
+  fs.writeFileSync(hang, "#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n", { mode: 0o755 });
+  process.env.PI_ROUTINES_NOTIFY = hang;
+  check("deliver: PI_ROUTINES_NOTIFY overrides the default", await runner.deliver("y") === true);
+  delete process.env.PI_ROUTINES_NOTIFY;
 }
 
 server.close();

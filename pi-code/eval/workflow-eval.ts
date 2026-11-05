@@ -1,5 +1,5 @@
 // Offline tests for the workflow extensions: plan mode's read-only bash
-// allowlist, lint feedback on real files, and the prompt templates' shape.
+// allowlist and lint feedback on real files.
 // No model calls. Run: ./workflow-eval.sh
 
 import fs from "node:fs";
@@ -120,13 +120,6 @@ const after = "a.sh:4:1: warning: Double quote to prevent globbing [SC2086]\na.s
 check("lint baseline drops warnings that only moved", newProblems(after, before) === "a.sh:12:1: warning: y is unused [SC2034]", newProblems(after, before));
 check("lint baseline keeps everything for a new file", newProblems(after, undefined) === after);
 check("lint baseline counts repeats", newProblems("f:1: w A\nf:2: w A", "f:1: w A") === "f:2: w A", newProblems("f:1: w A\nf:2: w A", "f:1: w A"));
-
-// ---- prompt templates: frontmatter with a description, no attribution
-const pdir = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "prompts");
-for (const f of fs.readdirSync(pdir).filter((f) => f.endsWith(".md"))) {
-  const t = fs.readFileSync(path.join(pdir, f), "utf8");
-  check(`template ${f} has a description`, /^---\n(?:.*\n)*?description: .+\n(?:.*\n)*?---\n/.test(t));
-}
 
 console.log(`----\npass=${pass} fail=${fail}`);
 process.exit(fail ? 1 : 0);

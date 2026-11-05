@@ -115,16 +115,6 @@ if [ -n "$PI_VERSION" ] && command -v npm >/dev/null 2>&1; then
         rm -f ~/.local/bin/pi-local   # retired: plain `pi` is the launcher now
         mkdir -p ~/.pi/agent/extensions
         ln -svfn ~/.dotfiles/pi-code/extensions ~/.pi/agent/extensions/homelab
-        # Prompt templates (/review, /commit, ...): pi loads only direct .md
-        # children, so link each one. Your own templates there are left alone;
-        # links to templates since removed from dotfiles are cleaned up.
-        mkdir -p ~/.pi/agent/prompts
-        for t in ~/.pi/agent/prompts/*.md; do
-            [ -L "$t" ] && case "$(readlink "$t")" in */.dotfiles/pi-code/prompts/*) [ -e "$t" ] || rm -f -- "$t" ;; esac
-        done
-        for t in ~/.dotfiles/pi-code/prompts/*.md; do
-            ln -sfn "$t" ~/.pi/agent/prompts/"${t##*/}"
-        done
         # Defaults: the arbiter's default model, and an HTTP idle timeout past
         # the arbiter's 600 s wait budget (pi's default of 300 s abandons
         # requests the arbiter would have served). Other settings are kept.

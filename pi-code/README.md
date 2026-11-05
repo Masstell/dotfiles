@@ -4,8 +4,7 @@ The [pi](https://pi.dev) coding agent as an occasional local-model stand-in
 for Claude Code: pi on the arbiter's default model, inside a bubblewrap
 sandbox, with a bash classifier we own, an advisor for second opinions, web
 search, per-project memory that stays private to the local model, and
-workflow tools: prompt templates, lint feedback, `ask_user`, plan mode and
-parallel subagents.
+workflow tools: lint feedback, `ask_user`, plan mode and parallel subagents.
 
 ```
 pi-code/
@@ -26,7 +25,6 @@ pi-code/
 │   ├── ask-user.ts            ask_user tool (a question with choices)
 │   ├── plan-mode.ts           /plan: investigate and plan, no file changes
 │   └── subagent.ts            subagent tool: parallel workers with their own context
-├── prompts/                   → ~/.pi/agent/prompts (/review, /commit, /ansible-check, /explain)
 ├── policy/
 │   ├── bash-safety-sandbox.md classifier policy inside the sandbox (default)
 │   ├── bash-safety.md         classifier policy without it (PI_NOSANDBOX=1)
@@ -237,16 +235,6 @@ Per-project notes for future sessions, kept away from Claude Code.
 
 ## Workflow tools
 
-- **Prompt templates** (`prompts/`, linked into `~/.pi/agent/prompts`): a
-  Markdown file becomes a slash command that sends its text, with `$1`, `$@`
-  or `${1:-default}` filled from what you type after it.
-  - `/review [range or focus]`: review uncommitted changes for real bugs, no edits.
-  - `/commit [context]`: commit in the repo's style, no AI attribution, no push.
-  - `/ansible-check <change>`: is this Ansible-managed? If so, write the role change instead.
-  - `/explain <path or feature>`: walk through how something works.
-
-  Add your own in `~/.pi/agent/prompts/` (`/reload` picks them up); install.sh
-  leaves files it didn't link alone.
 - **Lint feedback** (`lint.ts`): after a successful edit or write, the file is
   checked and problems are appended to the tool result, so the model fixes
   them in the same turn. Built in: `bash -n`, Python syntax, `node --check`,
@@ -284,7 +272,7 @@ cd eval
 ./run-eval.sh --offline    # detection invariants only, no model
 ./run-eval.sh --only=92,107
 ./memory-eval.sh           # project memory: recall, restraint, write checks (offline)
-./workflow-eval.sh         # plan-mode allowlist, lint on real files, templates (offline)
+./workflow-eval.sh         # plan-mode allowlist, lint on real files (offline)
 ```
 
 `run-eval.ts` imports `extensions/classifier-core.ts`, so it runs the exact

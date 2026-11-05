@@ -158,7 +158,8 @@ export default function registerUndo(pi: any) {
       try { now = store.snapshot("before undo"); } catch (e: any) { ctx.ui.notify(`Undo failed: ${e.message}`, "error"); return; }
       const changes = store.changes(now, cp.commit);
       if (!changes.length) { ctx.ui.notify("No file has changed since then; nothing to undo.", "info"); return; }
-      const shown = changes.slice(0, 25).map((l) => l.replace(/^A /, "restore ").replace(/^D /, "delete  ").replace(/^M /, "revert  "));
+      const words = changes.map((l) => l.replace(/^A /, "restore ").replace(/^D /, "delete  ").replace(/^M /, "revert  ").replace(/^T /, "revert  "));
+      const shown = words.slice(0, 25);
       const ok = await ctx.ui.confirm(
         `Undo ${changes.length} file change${changes.length === 1 ? "" : "s"}?`,
         [...shown, ...(changes.length > shown.length ? [`… and ${changes.length - shown.length} more`] : []), "",
@@ -174,7 +175,7 @@ export default function registerUndo(pi: any) {
       pi.sendMessage({
         customType: ENTRY, display: true,
         content: `The owner undid file changes: the project's files are back to how they were before the prompt "${oneLine(cp.prompt, 120)}". ` +
-          `Changed by the undo: ${changes.slice(0, 40).join(", ")}${changes.length > 40 ? ", …" : ""}. ` +
+          `What the undo did: ${words.slice(0, 40).map((w) => w.replace(/\s+/, " ")).join(", ")}${changes.length > 40 ? ", …" : ""}. ` +
           "Edits you made after that point are gone from disk; read files again before changing them.",
       });
       ctx.ui.notify(`Undone: ${changes.length} file${changes.length === 1 ? "" : "s"} restored.`, "info");

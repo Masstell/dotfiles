@@ -224,7 +224,7 @@ const textOf = (r: any) => r?.content?.map((c: any) => c.text).join("") || "";
   check("undo: ignored files untouched", fs.readFileSync(path.join(proj, "build/out.bin"), "utf8") === "changed build");
   check("undo: the project's own .git untouched", fs.readFileSync(path.join(proj, ".git/HEAD"), "utf8") === projGitHead && !fs.existsSync(path.join(proj, ".git/refs/heads/undo")));
   check("undo: planted fsmonitor/hook never ran", !fs.existsSync(marker));
-  check("undo: the model is told", f.messages.length === 1 && /back to how they were before the prompt "make it v2"/.test(f.messages[0].content) && /src\/new\.py/.test(f.messages[0].content), f.messages[0]?.content);
+  check("undo: the model is told", f.messages.length === 1 && /back to how they were before the prompt "make it v2"/.test(f.messages[0].content) && /delete src\/new\.py/.test(f.messages[0].content) && /restore README\.md/.test(f.messages[0].content), f.messages[0]?.content);
   // The undo can itself be undone: newest checkpoint is "just before undoing".
   pickIndex = 0;
   await f.cmds.get("undo").handler("", ctx);

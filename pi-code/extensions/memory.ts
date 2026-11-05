@@ -25,12 +25,12 @@ import {
 
 const ON = /^(1|true|yes|on)$/i;
 const OFF = /^(0|false|no|off)$/i;
-const WEB_TOOLS = new Set(["web_fetch", "web_search"]);
+export const WEB_TOOLS = new Set(["web_fetch", "web_search"]);
 // Commands the agent runs that bring outside text into the conversation:
 // downloads, URLs, GitHub issue/PR text. Package installs and your own `!`
 // commands don't count: nearly every session has them, and asking every time
 // would just be noise.
-const WEB_BASH = new RegExp(
+export const WEB_BASH = new RegExp(
   [
     String.raw`\b(curl|wget|aria2c|lynx|w3m|httpie)\b`,
     String.raw`\bgit\s+clone\b`,
@@ -78,6 +78,9 @@ export default function registerMemory(pi: any, secrets: Secrets) {
   let snapshot = "";                 // the index section; rebuilt at session start / compaction / toggle
   let recalled = new Set<string>();  // note versions already injected this session
   let webTainted = false;            // the session has taken in web content
+  // Subagents (subagent.ts) report web content their workers read; it lands
+  // in this session through their results.
+  (globalThis as any)[Symbol.for("homelab.pi.memory.webTaint")] = () => { webTainted = true; };
 
   const notes = () => loadNotes(dir, key);
   const rebuild = () => {
@@ -104,6 +107,7 @@ export default function registerMemory(pi: any, secrets: Secrets) {
       if (e?.type === "compaction") recalled = new Set();
       const m = e?.message;
       if (m?.role === "toolResult" && WEB_TOOLS.has(String(m.toolName))) webTainted = true;
+      if (m?.role === "toolResult" && m.toolName === "subagent" && m.details?.web) webTainted = true;
       if (m?.role === "assistant" && Array.isArray(m.content)) {
         for (const part of m.content) {
           if (part?.type === "toolCall" && part.name === "bash" && WEB_BASH.test(String(part.arguments?.command || ""))) webTainted = true;

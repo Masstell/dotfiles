@@ -1,5 +1,9 @@
 // Plan mode: look first, change nothing, then agree on a plan.
 //
+// A guardrail for intent, not a security boundary: the bash classifier and
+// the sandbox still decide what is safe. The allowlist keeps the model from
+// "just quickly fixing" things while you are still deciding.
+//
 // /plan (or `pi --plan`) toggles it. While it is on:
 //   - edit and write are switched off (and blocked if called anyway);
 //   - bash runs only commands that read (the allowlist below), still
@@ -18,7 +22,9 @@ const WRITE_TOOLS = new Set(["edit", "write"]);
 const READ_ONLY = [
   /^(cat|head|tail|less|more|grep|egrep|fgrep|rg|fd|fdfind|find|ls|tree|pwd|echo|printf|wc|sort|uniq|cut|tr|column|diff|cmp|file|stat|du|df|which|whereis|type|realpath|readlink|basename|dirname|jq|yq|awk|nl|tac|rev|true|false|test)\b/,
   /^sed\s+-n\b/,
-  /^git\s+(status|log|diff|show|branch|remote|ls-files|ls-tree|grep|blame|rev-parse|describe|shortlog|config\s+--get)\b/,
+  /^git\s+(status|log|diff|show|ls-files|ls-tree|grep|blame|rev-parse|describe|shortlog|config\s+--get)\b/,
+  /^git\s+branch(\s+(-a|-r|-v|-vv|--list|--show-current|--contains|--merged)\b[^;&|]*)?\s*$/,
+  /^git\s+remote(\s+(-v|show|get-url)\b[^;&|]*)?\s*$/,
   /^(npm|pnpm|yarn)\s+(ls|list|view|info|outdated|why)\b/,
   /^(pip3?|uv\s+pip)\s+(list|show|freeze)\b/,
   /^(node|python3?|go|cargo|rustc|ruby|java|docker)\s+(--version|-V|version)\b/,
@@ -33,7 +39,8 @@ const NEVER = [
   /(^|[^<>])>{1,2}(?!&|\s*\/dev\/null\b)/, // redirect into a file (2>&1, >&2, >/dev/null are fine)
   /\b(rm|rmdir|mv|cp|mkdir|touch|chmod|chown|ln|tee|truncate|dd|shred|install|patch|xargs)\b/,
   /\bsed\b.*\s-i/,
-  /\bawk\b.*\bsystem\b/,
+  /\b(yq|sort|tree)\b.*\s(-i|-o|--output|--in-place)(\s|=|$)/,
+  /\bgit\b.*\s--output(=|\s)/,
   /\bfind\b.*\s-(delete|exec|execdir|ok|fprint)/,
   /\b(curl|wget)\b.*\s(-o|-O|--output|-T|--upload-file|-d|--data|-F|--form|-X\s*(POST|PUT|DELETE|PATCH))\b/,
 ];
@@ -49,6 +56,10 @@ export function isReadOnlyCommand(command: string): boolean {
   // Command substitution runs inside double quotes too: check the raw text.
   if (/\$\(|`|<\(|>\(/.test(cmd)) return false;
   const bare = blankQuotes(cmd);
+  // awk programs sit in quotes: look inside them for commands and output.
+  if (/\bawk\b/.test(bare) && /system\s*\(|getline|print[^;}]*[>|]/.test(cmd)) return false;
+  // Same for sed scripts: w writes a file, e runs a command.
+  if (/\bsed\b/.test(bare) && /[\d$/;{]\s*[wWe]\b/.test(cmd)) return false;
   if (NEVER.some((p) => p.test(bare))) return false;
   // Split on the bare text's operators, at the same offsets in the original.
   const parts: string[] = [];

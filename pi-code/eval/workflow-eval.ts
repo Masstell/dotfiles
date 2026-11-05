@@ -31,7 +31,10 @@ const allowed = [
   "grep x file 2>&1 | head",
   "wc -l src/*.ts; echo done",
   "echo 'a > b'",
-];
+  "git grep -i todo",
+  "git branch -a",
+  "sed -n '/we/p' notes.txt",
+]
 const blocked = [
   "rm -rf build",
   "echo hi > notes.txt",
@@ -55,6 +58,13 @@ const blocked = [
   "awk 'BEGIN{system(\"id\")}'",
   "ls | xargs rm",
   "diff <(ls a) <(ls b)",
+  "awk '{print > \"out\"}' f",
+  "sed -n '1w out' f",
+  "sed -n '1e id' f",
+  "git branch -D main",
+  "git remote add x url",
+  "sort -o f f",
+  "yq -i '.a=1' f.yml",
 ];
 for (const c of allowed) check(`plan allows: ${c}`, isReadOnlyCommand(c));
 for (const c of blocked) check(`plan blocks: ${c}`, !isReadOnlyCommand(c));

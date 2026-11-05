@@ -293,7 +293,9 @@ git_fingerprint() {
     [[ -e "$_git" ]] || { echo none; return; }
     { stat -c '%i' "$_git"; [[ -f "$_git" ]] && cat "$_git"
       cat "$_git/config" "$_git/commondir" 2>/dev/null
-      ls -la --time-style=+%s "$_git/hooks" 2>/dev/null
+      # -A, not -a: ".." is .git itself, whose mtime changes on every git
+      # index lock, which made plain `git status` look like tampering.
+      ls -lA --time-style=+%s "$_git/hooks" 2>/dev/null
     } | sha256sum
 }
 
@@ -303,7 +305,8 @@ for v in HOME USER LOGNAME SHELL PATH LANG LANGUAGE LC_ALL LC_CTYPE TERM \
          COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION TMUX TMUX_PANE EDITOR \
          VISUAL TZ DOCKER_HOST NO_COLOR PI_CODING_AGENT_DIR PI_LOCAL_READONLY PI_LOCAL_POLICY \
          PI_ADVISOR_SWAP_COOLDOWN_S PI_CLASSIFIER_DEADLINE_MS PI_ARBITER_URL \
-         PI_ARBITER_CTX PI_CLAUDE_MEMORY PI_MEMORY_CONFIRM; do
+         PI_ARBITER_CTX PI_CLAUDE_MEMORY PI_MEMORY_CONFIRM PI_LINT PI_SUBAGENT_MAX \
+         PI_SUBAGENT_TIMEOUT_S; do
     [[ -n "${!v:-}" ]] && args+=(--setenv "$v" "${!v}")
 done
 args+=(

@@ -7,12 +7,20 @@
 //   advisor           ask_advisor tool + /advisor command (second opinion)
 //   web-search        web_search (Brave, when a key is set) + web_fetch
 //   memory            per-project memory: remember/forget, index, recall, /memories
+//   lint              after edit/write, syntax and lint problems join the tool result
+//   ask-user          ask_user tool: a question with choices, when a decision is yours
+//   plan-mode         /plan: investigate and plan with no file changes
+//   subagent          subagent tool: up to 3 parallel workers with their own context
 
 import registerArbiter from "./arbiter-provider.ts";
 import registerClassifier from "./bash-classifier.ts";
 import registerAdvisor from "./advisor.ts";
 import registerWebTools from "./web-search.ts";
 import registerMemory from "./memory.ts";
+import registerLint from "./lint.ts";
+import registerAskUser from "./ask-user.ts";
+import registerPlanMode from "./plan-mode.ts";
+import registerSubagent from "./subagent.ts";
 import { readSecrets } from "./secrets.ts";
 
 export default async function (pi: any) {
@@ -23,6 +31,9 @@ export default async function (pi: any) {
   const secrets = readSecrets();
   // The gate first, and outside any try: if anything below fails, bash must
   // still be classified, not run unchecked.
+  // Plan mode's gate goes first: it only ever blocks, and a command it blocks
+  // shouldn't wait on a classifier call. Its failure must not stop the classifier.
+  try { registerPlanMode(pi); } catch (err: any) { console.error(`homelab extensions: plan mode failed to load: ${String(err?.message || err)}`); }
   registerClassifier(pi, secrets);
   // A project's own .pi/extensions and skills would run inside pi's process,
   // where the keys are, and the agent can write them. Decline every project,
@@ -33,6 +44,10 @@ export default async function (pi: any) {
     ["advisor", registerAdvisor],
     ["web tools", registerWebTools],
     ["memory", registerMemory],
+    ["lint", registerLint],
+    ["subagent", registerSubagent],
+    // Workers run headless: nobody to ask.
+    ...(process.env.PI_SUBAGENT ? [] : ([["ask_user", registerAskUser]] as const)),
   ] as const) {
     try {
       await register(pi, secrets);

@@ -1,0 +1,6 @@
+{
+  "prompt": "intervals.py has an IntervalSet that is slow and wrong in places (see ISSUES.md). Make it match SPEC.md exactly, and fast: it will be checked against a brute-force reference on many random operation sequences, and timed on large inputs.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 25,
+  "tags": ["python", "algorithms", "performance", "hard"]
+}

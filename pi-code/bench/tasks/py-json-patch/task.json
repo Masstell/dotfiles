@@ -1,0 +1,6 @@
+{
+  "prompt": "Implement apply_patch() in jsonpatch.py: JSON Patch (RFC 6902) with JSON Pointer (RFC 6901), following SPEC.md where it settles details. It will be checked against many cases, including every way a patch can be invalid.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 20,
+  "tags": ["python", "spec", "hard"]
+}

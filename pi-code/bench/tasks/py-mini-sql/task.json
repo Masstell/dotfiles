@@ -1,0 +1,6 @@
+{
+  "prompt": "Implement query() in minisql.py: the small SQL SELECT engine described in SPEC.md, without sqlite3 or any other database library. Its results will be compared with SQLite's on many random tables and queries (NULLs, grouping, ordering, limits), and it must reject the invalid queries the spec lists.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 30,
+  "tags": ["python", "sql", "spec", "hard"]
+}

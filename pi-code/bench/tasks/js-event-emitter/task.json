@@ -1,0 +1,6 @@
+{
+  "prompt": "Implement Emitter in emitter.js exactly as SPEC.md describes (its behaviour matches Node's EventEmitter for the parts listed, but don't use node:events). It will be checked by replaying many random sequences of operations, including listeners that add, remove, emit or throw while an emit is running. Tests: node --test.",
+  "check": "node --test",
+  "timeoutMin": 25,
+  "tags": ["javascript", "spec", "hard"]
+}

@@ -6,6 +6,7 @@
 //
 //   bench.sh                  run every task once
 //   bench.sh --only a,b       some tasks
+//   bench.sh --tag hard       tasks with that tag (the fuzz-graded ones are tagged hard)
 //   bench.sh --repeat 3       each task 3 times (local models vary run to run)
 //   bench.sh --parallel 2     tasks at once (the arbiter is shared; default 1)
 //   bench.sh --selftest       no model: check every task fails as given and
@@ -41,6 +42,7 @@ function args() {
   const val = (k: string) => { const i = a.indexOf(k); return i >= 0 ? a[i + 1] : undefined; };
   return {
     only: val("--only")?.split(",").map((s) => s.trim()).filter(Boolean),
+    tag: val("--tag"),
     repeat: Math.max(1, Number(val("--repeat") || 1)),
     parallel: Math.max(1, Math.min(4, Number(val("--parallel") || 1))),
     selftest: a.includes("--selftest"),
@@ -48,14 +50,17 @@ function args() {
   };
 }
 
-function loadTasks(only?: string[]): Task[] {
+function loadTasks(only?: string[], tag?: string): Task[] {
   const ids = fs.readdirSync(TASKS).filter((d) => fs.existsSync(path.join(TASKS, d, "task.json"))).sort();
   const unknown = (only || []).filter((o) => !ids.includes(o));
   if (unknown.length) throw new Error(`unknown task(s): ${unknown.join(", ")}`);
-  return ids.filter((id) => !only || only.includes(id)).map((id) => {
+  const tasks = ids.filter((id) => !only || only.includes(id)).map((id) => {
     const j = JSON.parse(fs.readFileSync(path.join(TASKS, id, "task.json"), "utf8"));
     return { id, dir: path.join(TASKS, id), prompt: j.prompt, check: j.check, timeoutMin: j.timeoutMin || 10, tags: j.tags || [] };
   });
+  const picked = tag ? tasks.filter((t) => t.tags.includes(tag)) : tasks;
+  if (!picked.length) throw new Error(`no tasks${tag ? ` tagged ${tag}` : ""}`);
+  return picked;
 }
 
 const sh = (cmd: string, cwd: string, timeout = CHECK_TIMEOUT_MS) =>
@@ -149,7 +154,7 @@ function rate(rs: Result[]) { return rs.length ? rs.filter((r) => r.pass).length
 
 async function main() {
   const o = args();
-  const tasks = loadTasks(o.only);
+  const tasks = loadTasks(o.only, o.tag);
   if (o.list) { for (const t of tasks) console.log(`${t.id.padEnd(26)} ${t.tags.join(",").padEnd(22)} ${t.prompt.replace(/\s+/g, " ").slice(0, 90)}`); return 0; }
   if (o.selftest) return selftest(tasks);
 

@@ -392,7 +392,7 @@ that must not run).
 
 ### Coding bench
 
-The evals above test the harness; the bench tests pi as a coder: 14 small
+The evals above test the harness; the bench tests pi as a coder: 21
 synthetic tasks (Python, JavaScript, bash, a config file) that pi does
 unattended, the real way (`pi.sh -p`: sandbox, classifier, the local model),
 each in a throwaway git repo under `~/pi-bench/runs/`. Then tests pi never
@@ -402,6 +402,7 @@ saw are copied in, replacing any it edited, and decide pass or fail.
 cd bench
 ./bench.sh --selftest      # no model: each task fails as given, passes with its solution
 ./bench.sh                 # every task once (tens of minutes; the arbiter is shared)
+./bench.sh --tag hard      # only the 7 hard, fuzz-graded tasks
 ./bench.sh --parallel 2 --repeat 3 --only py-pagination,bash-spaces
 ./bench.sh --list
 ```
@@ -413,7 +414,15 @@ multi-step task; and the folder with each run's git diff. Results are JSON in
 extension, the model or pi itself; local models vary run to run, so use
 `--repeat` before trusting a small difference.
 
-The tasks cover: a bug from a failing test, a feature with a CLI flag, a
+Seven tasks are tagged `hard`: an expression evaluator, an interval set, cron
+with daylight saving, an EventEmitter clone, JSON Patch, a mini SQL engine,
+and an async job queue with three concurrency bugs. They're graded by
+fuzzing against a reference: thousands of random inputs compared with a
+hidden implementation, and with Node's own `events` and with SQLite where
+those exist. Getting nearly every edge case right still fails, so a capable
+model has room to score lower or higher.
+
+The 14 everyday tasks cover: a bug from a failing test, a feature with a CLI flag, a
 rename across files with a deprecated alias, a crash from a traceback, an
 implementation from a spec, a missing `await`, an LRU cache, bash quoting, a
 behaviour-preserving refactor, an O(n²) slowdown, a four-part multi-step

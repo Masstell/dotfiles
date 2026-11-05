@@ -12,6 +12,7 @@
 // Web content a worker reads counts as web content for this session's memory.
 
 import { spawn } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
 import { Type } from "typebox";
 import { WEB_BASH, WEB_TOOLS } from "./memory.ts";
 import { PLAN_STASH } from "./plan-mode.ts";
@@ -42,6 +43,32 @@ const MODES = {
   },
 } as const;
 type Mode = keyof typeof MODES;
+
+// Live worker pids, across /reload (session_shutdown stops them all).
+const LIVE = Symbol.for("homelab.pi.subagent.live");
+const live = ((globalThis as any)[LIVE] ??= new Set<number>()) as Set<number>;
+
+/** Signal a process and all its descendants (found via /proc), children
+ *  first. Returns the pids signalled. */
+export function killTree(pid: number, sig: NodeJS.Signals): number[] {
+  const kids = new Map<number, number[]>();
+  try {
+    for (const d of readdirSync("/proc")) {
+      if (!/^\d+$/.test(d)) continue;
+      try {
+        const stat = readFileSync(`/proc/${d}/stat`, "utf8");
+        const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+        if (!kids.has(ppid)) kids.set(ppid, []);
+        kids.get(ppid)!.push(Number(d));
+      } catch { /* exited meanwhile */ }
+    }
+  } catch { /* no /proc */ }
+  const order: number[] = [];
+  const walk = (p: number) => { for (const k of kids.get(p) || []) walk(k); order.push(p); };
+  walk(pid);
+  for (const p of order) { try { process.kill(p, sig); } catch { /* gone */ } }
+  return order;
+}
 
 type Result = { task: string; mode: Mode; ok: boolean; text: string; web: boolean; turns: number; error?: string };
 
@@ -80,9 +107,8 @@ function runWorker(task: string, mode: Mode, readOnly: boolean, secrets: Secrets
     let stderr = "";
     let buf = "";
     let done = false;
-    // Own process group, so a timeout or cancel also stops what the worker
-    // started (test runners, servers), not just its Node process.
-    const proc = spawn(process.execPath, args, { cwd: ctx?.cwd || process.cwd(), env, detached: true, stdio: ["ignore", "pipe", "pipe", "pipe"] });
+    const proc = spawn(process.execPath, args, { cwd: ctx?.cwd || process.cwd(), env, stdio: ["ignore", "pipe", "pipe", "pipe"] });
+    if (proc.pid) live.add(proc.pid);
     // Keys on fd 3, read once and closed by the worker's secrets.ts.
     const keys = proc.stdio[3] as any;
     keys?.on?.("error", () => { /* worker exited early */ });
@@ -100,10 +126,15 @@ function runWorker(task: string, mode: Mode, readOnly: boolean, secrets: Secrets
       onEvent();
       resolve();
     };
-    const killGroup = (sig: NodeJS.Signals) => {
-      try { if (proc.pid) process.kill(-proc.pid, sig); } catch { try { proc.kill(sig); } catch { /* gone */ } }
+    // A timeout or cancel also stops what the worker started (test runners,
+    // servers), whatever process groups they made.
+    // SIGKILL goes to the tree as it was at SIGTERM: once the worker exits,
+    // its children are re-parented and no longer findable from its pid.
+    const kill = () => {
+      if (!proc.pid) return;
+      const tree = killTree(proc.pid, "SIGTERM");
+      setTimeout(() => { for (const p of tree) { try { process.kill(p, "SIGKILL"); } catch { /* gone */ } } }, 5000).unref();
     };
-    const kill = () => { killGroup("SIGTERM"); setTimeout(() => killGroup("SIGKILL"), 5000).unref(); };
     const abort = () => { kill(); finish("cancelled"); };
     const timer = setTimeout(() => { kill(); finish(`timed out after ${TIMEOUT_MS / 1000}s`); }, TIMEOUT_MS);
     if (signal?.aborted) return abort();
@@ -133,6 +164,7 @@ function runWorker(task: string, mode: Mode, readOnly: boolean, secrets: Secrets
     proc.stderr!.on("data", (d) => { stderr = (stderr + d.toString()).slice(-4000); });
     proc.on("error", (e) => finish(String(e?.message || e)));
     proc.on("close", (code) => {
+      if (proc.pid) live.delete(proc.pid);
       if (buf.trim()) line(buf);
       finish(code && !last.trim() ? `exited with code ${code}` : undefined);
     });
@@ -141,6 +173,11 @@ function runWorker(task: string, mode: Mode, readOnly: boolean, secrets: Secrets
 
 export default function registerSubagent(pi: any, secrets: Secrets) {
   if (process.env.PI_SUBAGENT) return; // workers don't start workers
+  // Quitting, /new, /resume or /reload: no worker outlives its session.
+  pi.on("session_shutdown", async () => {
+    for (const pid of [...live]) killTree(pid, "SIGKILL");
+    live.clear();
+  });
   pi.registerTool({
     name: "subagent",
     label: "Subagent",

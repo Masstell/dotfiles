@@ -115,14 +115,16 @@ export default function registerPlanMode(pi: any) {
     },
   });
 
-  pi.on("session_start", async (_event: any, ctx: any) => {
+  pi.on("session_start", async (event: any, ctx: any) => {
     let on = false;
     try {
       for (const e of ctx?.sessionManager?.getBranch?.() ?? []) {
         if (e?.type === "custom" && e?.customType === "plan-mode") on = !!e?.data?.on;
       }
     } catch { /* no history */ }
-    if (pi.getFlag?.("plan") && !process.env.PI_SUBAGENT) on = true;
+    // --plan sets the start; after that, /plan decides (a later /reload or
+    // /new must not switch it back on).
+    if (event?.reason === "startup" && pi.getFlag?.("plan") && !process.env.PI_SUBAGENT) on = true;
     apply(on, ctx, false);
   });
 

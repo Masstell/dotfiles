@@ -3,7 +3,9 @@
 The [pi](https://pi.dev) coding agent as an occasional local-model stand-in
 for Claude Code: pi on the arbiter's default model, inside a bubblewrap
 sandbox, with a bash classifier we own, an advisor for second opinions, web
-search, and per-project memory that stays private to the local model.
+search, per-project memory that stays private to the local model, and
+workflow tools: prompt templates, lint feedback, `ask_user`, plan mode and
+parallel subagents.
 
 ```
 pi-code/
@@ -19,7 +21,12 @@ pi-code/
 │   ├── advisor.ts             ask_advisor tool + /advisor command
 │   ├── web-search.ts          web_search (Brave) + web_fetch tools
 │   ├── memory-core.ts         project memory: storage, index, recall, write checks
-│   └── memory.ts              remember/forget tools, recall hook, /memories
+│   ├── memory.ts              remember/forget tools, recall hook, /memories
+│   ├── lint.ts                after edit/write: syntax and lint problems join the result
+│   ├── ask-user.ts            ask_user tool (a question with choices)
+│   ├── plan-mode.ts           /plan: investigate and plan, no file changes
+│   └── subagent.ts            subagent tool: parallel workers with their own context
+├── prompts/                   → ~/.pi/agent/prompts (/review, /commit, /ansible-check, /explain)
 ├── policy/
 │   ├── bash-safety-sandbox.md classifier policy inside the sandbox (default)
 │   ├── bash-safety.md         classifier policy without it (PI_NOSANDBOX=1)
@@ -228,6 +235,46 @@ Per-project notes for future sessions, kept away from Claude Code.
   `install.sh` adds `Read`/`Edit` deny rules. A recursive grep of the whole
   home directory from Claude's shell could still reach it.
 
+## Workflow tools
+
+- **Prompt templates** (`prompts/`, linked into `~/.pi/agent/prompts`): a
+  Markdown file becomes a slash command that sends its text, with `$1`, `$@`
+  or `${1:-default}` filled from what you type after it.
+  - `/review [range or focus]`: review uncommitted changes for real bugs, no edits.
+  - `/commit [context]`: commit in the repo's style, no AI attribution, no push.
+  - `/ansible-check <change>`: is this Ansible-managed? If so, write the role change instead.
+  - `/explain <path or feature>`: walk through how something works.
+
+  Add your own in `~/.pi/agent/prompts/` (`/reload` picks them up); install.sh
+  leaves files it didn't link alone.
+- **Lint feedback** (`lint.ts`): after a successful edit or write, the file is
+  checked and problems are appended to the tool result, so the model fixes
+  them in the same turn. Built in: `bash -n`, Python syntax, `node --check`,
+  JSON and YAML parsing; shellcheck, ruff, yamllint and gofmt are used when
+  installed in system paths. Project-local linters never run (they would run
+  outside the classifier). `PI_LINT=0` turns it off.
+- **`ask_user`** (`ask-user.ts`): the model asks you a question with 2-5
+  choices plus a typed answer, instead of guessing. Headless runs are told
+  nobody can answer, so the model decides and states its assumption.
+- **Plan mode** (`plan-mode.ts`): `/plan` or `pi --plan`. edit/write are off,
+  bash runs only read-only commands (an allowlist: no redirects, command
+  substitution, `rm`/`mv`/`sed -i`, git writes, installs or scripts), and the
+  model ends with a numbered plan. pi then asks: execute it, keep planning,
+  or leave plan mode. A guardrail for intent; the classifier and sandbox
+  still decide what is safe. The state survives a resume.
+- **Subagents** (`subagent.ts`): the `subagent` tool runs 1-6 self-contained
+  tasks in fresh pi workers, at most 3 at a time (`PI_SUBAGENT_MAX`, up to 4),
+  and returns each worker's final answer (capped at 20k characters each).
+  - `explore` (default): read, search, bash, web; told not to edit.
+  - `work`: can also edit; meant for tasks that touch different files.
+  - Workers run in the same sandbox with the same extensions: their bash is
+    classified, project extensions stay off, memory is read-only, keys arrive
+    on a descriptor, `--disable-sigusr1` applies, and they can't start
+    workers or ask you questions. In plan mode every worker is explore-only
+    with plan mode's bash allowlist.
+  - Web content a worker read counts as web content for this session's memory
+    confirmation. A worker times out after 20 minutes (`PI_SUBAGENT_TIMEOUT_S`).
+
 ## Eval
 
 ```bash
@@ -237,6 +284,7 @@ cd eval
 ./run-eval.sh --offline    # detection invariants only, no model
 ./run-eval.sh --only=92,107
 ./memory-eval.sh           # project memory: recall, restraint, write checks (offline)
+./workflow-eval.sh         # plan-mode allowlist, lint on real files, templates (offline)
 ```
 
 `run-eval.ts` imports `extensions/classifier-core.ts`, so it runs the exact

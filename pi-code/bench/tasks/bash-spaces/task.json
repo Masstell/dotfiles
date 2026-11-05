@@ -1,0 +1,9 @@
+{
+  "prompt": "backup.sh breaks when file or folder names contain spaces. Fix it. It must also work when the source folder has no .txt files, printing `backed up 0 files`. Keep its arguments and output format.",
+  "check": "bash tests/test_backup.sh",
+  "timeoutMin": 10,
+  "tags": [
+    "bash",
+    "bugfix"
+  ]
+}

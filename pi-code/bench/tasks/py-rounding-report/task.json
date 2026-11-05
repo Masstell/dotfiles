@@ -1,0 +1,10 @@
+{
+  "prompt": "Users report that round_half_up(-2.5) in money.py returns -2.0 but should be -3.0 (halves round away from zero), and round_half_up(1.005, 2) returns 1.0 instead of 1.01 (the value as written, not its binary float). Fix money.py and add tests in tests/.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 10,
+  "tags": [
+    "python",
+    "debug",
+    "write-tests"
+  ]
+}

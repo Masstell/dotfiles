@@ -13,6 +13,8 @@
 //   subagent          subagent tool: up to 3 parallel workers with their own context
 //   schedule          cron_create / schedule_wakeup: prompts on a schedule in this session
 //   routines          routine_create: scheduled unattended runs that survive restarts; notify
+//   todo              todo_write: a visible task checklist for multi-step work; /todos
+//   undo              snapshot the project before each prompt; /undo puts files back
 
 import registerArbiter from "./arbiter-provider.ts";
 import registerClassifier from "./bash-classifier.ts";
@@ -25,6 +27,8 @@ import registerPlanMode from "./plan-mode.ts";
 import registerSubagent from "./subagent.ts";
 import registerSchedule from "./schedule.ts";
 import registerRoutines from "./routines.ts";
+import registerTodo from "./todo.ts";
+import registerUndo from "./undo.ts";
 import { readSecrets } from "./secrets.ts";
 
 export default async function (pi: any) {
@@ -51,6 +55,8 @@ export default async function (pi: any) {
     ["lint", registerLint],
     ["subagent", registerSubagent],
     ["routines", registerRoutines],
+    ["todo", registerTodo],
+    ["undo", registerUndo],
     // Workers and routine runs are headless: nobody to ask, nothing to schedule into.
     ...(process.env.PI_SUBAGENT || process.env.PI_ROUTINE ? [] : ([["ask_user", registerAskUser], ["schedule", registerSchedule]] as const)),
   ] as const) {

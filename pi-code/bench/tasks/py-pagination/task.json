@@ -1,0 +1,9 @@
+{
+  "prompt": "The tests in tests/ fail: paginate returns the wrong page. Fix pager.py so pages are 1-based as its docstring says, page_count counts a final partial page, and a page number below 1 raises ValueError. Run the tests.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 10,
+  "tags": [
+    "python",
+    "bugfix"
+  ]
+}

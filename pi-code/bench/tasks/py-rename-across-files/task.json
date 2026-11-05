@@ -1,0 +1,10 @@
+{
+  "prompt": "Rename the function fetch_user to get_user everywhere in this project: its definition, every caller and the tests. Keep fetch_user importable from shop.users as a deprecated alias that emits a DeprecationWarning and returns the same result.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 10,
+  "tags": [
+    "python",
+    "refactor",
+    "multi-file"
+  ]
+}

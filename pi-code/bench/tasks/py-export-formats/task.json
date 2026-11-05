@@ -1,0 +1,10 @@
+{
+  "prompt": "Extend inventory.py: (1) add to_csv(items) returning CSV text with the header name,qty,price and one row per item, prices with 2 decimals; (2) add to_json(items) returning the items as indented JSON, sorted by name; (3) add a --format option to the command line: table (the default, as now), csv or json; (4) document --format in README.md. Add tests for the new parts.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 15,
+  "tags": [
+    "python",
+    "feature",
+    "multi-step"
+  ]
+}

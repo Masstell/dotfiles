@@ -1,0 +1,9 @@
+{
+  "prompt": "format_invoice and format_receipt in report.py repeat the same money formatting. Extract it into one function format_money(cents, currency) that returns e.g. \"$1,234.50\" or \"$-0.05\", and use it in both functions, without changing any output of either.",
+  "check": "python3 -m unittest discover -s tests -t . -q",
+  "timeoutMin": 10,
+  "tags": [
+    "python",
+    "refactor"
+  ]
+}

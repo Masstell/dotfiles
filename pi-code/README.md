@@ -7,7 +7,7 @@ search, and per-project memory that stays private to the local model.
 
 ```
 pi-code/
-├── PI_VERSION                 pinned pi release (install.sh installs exactly this)
+├── npm/                       pi pinned with its whole dependency tree (package.json + lockfile)
 ├── pi.sh                      `pi` on PATH: builds the sandbox, then runs pi in it
 ├── extensions/                → ~/.pi/agent/extensions/homelab (auto-loaded)
 │   ├── index.ts               entry point; wires the modules below
@@ -33,9 +33,10 @@ On the VMs this is automatic. The Ansible `vm_base` role installs `nodejs`,
 `npm` and `bubblewrap` from apt where `pi_agent: true`, and the dotfiles
 installer (re-run by the 30-minute update timer whenever the repo changes):
 
-- installs pi at the version in `PI_VERSION` into
-  `~/.local/share/pi-agent/<version>` (no sudo, `--ignore-scripts`), and
-  removes any other version — bumping `PI_VERSION` upgrades every VM;
+- installs pi from `npm/package-lock.json` with `npm ci --ignore-scripts`
+  into `~/.local/share/pi-agent/<version>-<lock hash>` (no sudo), exactly the
+  locked tree with its integrity hashes checked, and removes any other build —
+  changing the lockfile upgrades every VM;
 - links `~/.local/bin/pi` → `pi.sh` and `~/.pi/agent/extensions/homelab` →
   `extensions/`;
 - sets `defaultProvider: arbiter`, `defaultModel: default`, and
@@ -295,4 +296,10 @@ Measured on 0.84.x with the host policy, before the sandbox:
   malicious file in the repo (not the web) is only shown, not confirmed.
   Skim `/memories` now and then.
 - **pi version bumps** — the classifier relies on pi's `tool_call` hook.
-  Re-run the eval before bumping `PI_VERSION`.
+  Bump deliberately: set the version in `npm/package.json`, regenerate the
+  lockfile (`npm install --package-lock-only --ignore-scripts` in `npm/`),
+  then re-run the evals before merging.
+- **CVEs in pi or its dependencies** — vulnwatch's daily Trivy scan reads
+  `npm/package-lock.json`, and its advisory feed follows pi's GitHub
+  advisories. To fix a vulnerable dependency before pi ships an update, add an
+  `overrides` entry in `npm/package.json` and regenerate the lockfile.

@@ -90,26 +90,40 @@ rm -f ~/.local/bin/claude-trusted
 [ -x /usr/local/sbin/docker-ro ] && ln -svfn ~/.dotfiles/docker-shim.sh ~/.local/bin/docker
 # pi coding agent (pi.dev) — see pi-code/README.md. Node/npm and bubblewrap
 # come from apt via the Ansible vm_base role (pi_agent); this installs pi itself
-# at the version pinned in pi-code/PI_VERSION into ~/.local/share/pi-agent/<v>
-# (--ignore-scripts, no sudo), so bumping the pin upgrades every VM on its next
+# from pi-code/npm: package.json pins the release, package-lock.json pins every
+# dependency (with integrity hashes), and `npm ci --ignore-scripts` installs
+# exactly that tree into ~/.local/share/pi-agent/<version>-<lock hash> (no sudo).
+# The lockfile is also what vulnwatch's Trivy scan reads, so a CVE in any of
+# pi's dependencies alerts. Changing either file upgrades every VM on its next
 # dotfiles pull. PINNED because the classifier rides on pi's tool_call hook:
 # bump deliberately after re-running pi-code/eval against the new release.
 # ~/.local/bin/pi is the sandbox wrapper, never the bare binary.
-PI_VERSION="$(cat "$DOTFILES_DIR/pi-code/PI_VERSION" 2>/dev/null || true)"
+PI_NPM="$DOTFILES_DIR/pi-code/npm"
 PI_ROOT="$HOME/.local/share/pi-agent"
-if [ -n "$PI_VERSION" ] && command -v npm >/dev/null 2>&1; then
-    if [ ! -x "$PI_ROOT/$PI_VERSION/bin/pi" ]; then
-        echo "installing pi $PI_VERSION (pi.dev coding agent) via npm..."
-        npm install -g --prefix "$PI_ROOT/$PI_VERSION" --ignore-scripts --no-fund --no-audit \
-            "@earendil-works/pi-coding-agent@$PI_VERSION" \
-            || echo "pi auto-install failed — see pi-code/README.md"
+PI_VERSION=""
+if [ -f "$PI_NPM/package-lock.json" ] && command -v npm >/dev/null 2>&1; then
+    PI_VERSION="$(node -p 'require(process.argv[1]).packages["node_modules/@earendil-works/pi-coding-agent"].version' "$PI_NPM/package-lock.json" 2>/dev/null || true)"
+fi
+if [ -n "$PI_VERSION" ]; then
+    PI_BUILD="$PI_VERSION-$(cat "$PI_NPM/package.json" "$PI_NPM/package-lock.json" | sha256sum | cut -c1-12)"
+    if [ ! -x "$PI_ROOT/$PI_BUILD/bin/pi" ]; then
+        echo "installing pi $PI_VERSION (pi.dev coding agent) from the lockfile via npm ci..."
+        rm -rf -- "${PI_ROOT:?}/$PI_BUILD"
+        mkdir -p "$PI_ROOT/$PI_BUILD/lib" "$PI_ROOT/$PI_BUILD/bin"
+        cp "$PI_NPM/package.json" "$PI_NPM/package-lock.json" "$PI_ROOT/$PI_BUILD/lib/"
+        if (cd "$PI_ROOT/$PI_BUILD/lib" && npm ci --ignore-scripts --omit=dev --no-fund --no-audit); then
+            ln -sfn ../lib/node_modules/.bin/pi "$PI_ROOT/$PI_BUILD/bin/pi"
+        else
+            echo "pi auto-install failed — see pi-code/README.md"
+            rm -rf -- "${PI_ROOT:?}/$PI_BUILD"
+        fi
     fi
-    if [ -x "$PI_ROOT/$PI_VERSION/bin/pi" ]; then
-        ln -sfn "$PI_VERSION" "$PI_ROOT/current"
-        # Keep only the pinned version.
+    if [ -x "$PI_ROOT/$PI_BUILD/bin/pi" ]; then
+        ln -sfn "$PI_BUILD" "$PI_ROOT/current"
+        # Keep only the pinned build.
         for old in "$PI_ROOT"/*/; do
             old="${old%/}"
-            [ "${old##*/}" = "$PI_VERSION" ] || [ "${old##*/}" = current ] || rm -rf -- "$old"
+            [ "${old##*/}" = "$PI_BUILD" ] || [ "${old##*/}" = current ] || rm -rf -- "$old"
         done
         ln -svfn ~/.dotfiles/pi-code/pi.sh ~/.local/bin/pi
         rm -f ~/.local/bin/pi-local   # retired: plain `pi` is the launcher now

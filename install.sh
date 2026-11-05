@@ -120,6 +120,9 @@ if [ -n "$PI_VERSION" ] && command -v npm >/dev/null 2>&1; then
         # requests the arbiter would have served). Other settings are kept.
         # lastChangelogVersion: the sandbox discards pi's own settings writes,
         # so without this pi would show the changelog on every launch.
+        # defaultProjectTrust never: a project's own .pi/extensions would run
+        # inside pi's process (where the keys are); the agent can write those
+        # files, so project-local pi resources are never loaded.
         if command -v jq >/dev/null; then
             PI_SETTINGS=~/.pi/agent/settings.json
             [ -s "$PI_SETTINGS" ] || echo '{}' > "$PI_SETTINGS"
@@ -127,7 +130,8 @@ if [ -n "$PI_VERSION" ] && command -v npm >/dev/null 2>&1; then
             jq --arg v "$PI_VERSION" '.defaultProvider = (.defaultProvider // "arbiter")
                 | .defaultModel = (.defaultModel // "default")
                 | .httpIdleTimeoutMs = ([(.httpIdleTimeoutMs // 0), 900000] | max)
-                | .lastChangelogVersion = $v' \
+                | .lastChangelogVersion = $v
+                | .defaultProjectTrust = "never"' \
                 "$PI_SETTINGS" > "$tmp" && mv "$tmp" "$PI_SETTINGS" || rm -f "$tmp"
         fi
     fi
@@ -172,6 +176,7 @@ if command -v jq >/dev/null; then
       .statusLine = {type:"command", command:"~/.claude/statusline.sh", padding:0, refreshInterval:10}
       | .attribution = {commit:"", pr:"", sessionUrl:false}
       | .permissions = ((.permissions // {}) + {allow: (((.permissions.allow // []) + ["Bash(~/.claude/bin/claude-status:*)"]) | unique)})
+      | .permissions.deny = (((.permissions.deny // []) + ["Read(~/.local/share/pi-memory/**)", "Edit(~/.local/share/pi-memory/**)"]) | unique)
       | .hooks = (.hooks // {})
       | .hooks.PreToolUse = (
           ((.hooks.PreToolUse // [])
@@ -179,7 +184,8 @@ if command -v jq >/dev/null; then
             | map(select((.hooks | length) > 0)))
           + [
               {matcher: "Bash", hooks: [{type: "command", command: $guard}]},
-              {matcher: "Write|Edit|MultiEdit|NotebookEdit", hooks: [{type: "command", command: $guard}]}
+              {matcher: "Write|Edit|MultiEdit|NotebookEdit", hooks: [{type: "command", command: $guard}]},
+              {matcher: "Read|Grep|Glob", hooks: [{type: "command", command: $guard}]}
             ]
         )
     ' "$SETTINGS" > "$tmp"

@@ -44,6 +44,25 @@ if [[ ! -x "$PI_BIN" ]]; then
     exit 1
 fi
 
+# Project-local pi resources (.pi/extensions, skills) never load: they would
+# run inside pi's process, where the keys are, and the agent can write them.
+# --approve is applied before any extension can refuse, so it is dropped here
+# and --no-approve always added (the homelab extension also declines trust).
+_argv=()
+for a in "$@"; do
+    case "$a" in
+        -a|--approve) echo "pi: ignoring $a — project-local pi resources are never loaded here." >&2 ;;
+        *) _argv+=("$a") ;;
+    esac
+done
+# pi recognizes subcommands only as the first argument, so those are left as
+# they are (they don't start an agent session).
+case "${_argv[0]:-}" in
+    install|remove|uninstall|update|list|config|mcp|auth) set -- "${_argv[@]}" ;;
+    *) set -- --no-approve "${_argv[@]}" ;;
+esac
+unset _argv
+
 # Already inside the sandbox (pi started from pi's own shell): just run it.
 if [[ "${PI_SANDBOX:-}" == 1 ]]; then
     exec "$PI_BIN" "$@"
@@ -61,21 +80,48 @@ read_env() {
             # shellcheck disable=SC1090
             [[ -f "$f" ]] && { set -a; source "$f"; set +a; }
         done
-        printf 'PI_ARBITER_KEY=%s\nBRAVE_API_KEY=%s\nPI_ARBITER_URL=%s\n' \
+        printf 'PI_ARBITER_KEY=%s\nBRAVE_API_KEY=%s\nPI_ARBITER_URL=%s\nPI_CLAUDE_MEMORY=%s\nPI_MEMORY_CONFIRM=%s\n' \
             "${PI_ARBITER_KEY:-${OPENCODE_ARBITER_KEY:-${LLAMA_API_KEY:-}}}" \
             "${BRAVE_API_KEY:-}" \
-            "${PI_ARBITER_URL:-${OPENCODE_LLM_URL:-${LLAMA_URL:-}}}"
+            "${PI_ARBITER_URL:-${OPENCODE_LLM_URL:-${LLAMA_URL:-}}}" \
+            "${PI_CLAUDE_MEMORY:-}" \
+            "${PI_MEMORY_CONFIRM:-}"
     )
 }
 _env="$(read_env)"
 KEYS="$(grep -E '^(PI_ARBITER_KEY|BRAVE_API_KEY)=' <<<"$_env")"
 _url="$(sed -n 's/^PI_ARBITER_URL=//p' <<<"$_env")"
 [[ -n "$_url" && -z "${PI_ARBITER_URL:-}" ]] && export PI_ARBITER_URL="$_url"
-unset _env _url
+for _v in PI_CLAUDE_MEMORY PI_MEMORY_CONFIRM; do
+    _cm="$(sed -n "s/^${_v}=//p" <<<"$_env")"
+    [[ -n "$_cm" && -z "${!_v:-}" ]] && export "$_v=$_cm"
+done
+unset _env _url _cm _v
 if [[ -z "$(sed -n 's/^PI_ARBITER_KEY=//p' <<<"$KEYS")" ]]; then
     echo "pi: no arbiter key. Set PI_ARBITER_KEY in ~/.config/pi-agent/env (Ansible) or ~/.dotfiles/.env." >&2
     exit 1
 fi
+# Project memory is signed with a per-user key (extensions/memory-core.ts).
+# It lives in ~/.config/pi-agent, which the sandbox hides, and reaches pi on
+# fd 3 with the other keys, so nothing pi runs can read it or forge a note.
+MEMORY_KEY_FILE="${HOME}/.config/pi-agent/memory.key"
+# An empty key file (an interrupted first write) is replaced, not kept forever.
+[[ -f "$MEMORY_KEY_FILE" && ! -s "$MEMORY_KEY_FILE" ]] && rm -f "$MEMORY_KEY_FILE"
+if [[ ! -s "$MEMORY_KEY_FILE" ]]; then
+    [[ -d "${MEMORY_KEY_FILE%/*}" ]] || mkdir -m 700 -p "${MEMORY_KEY_FILE%/*}"
+    # noclobber: two first launches at once must not each write a key.
+    (umask 077; set -o noclobber
+     head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$MEMORY_KEY_FILE") 2>/dev/null || true
+fi
+KEYS+=$'\n'"PI_MEMORY_KEY=$(<"$MEMORY_KEY_FILE")"
+
+# Nothing inside may get code into pi's process, where the keys live:
+# - Node opens its inspector (a code-execution port) on SIGUSR1, which any
+#   process in the sandbox could send; --disable-sigusr1 turns that off.
+# - No core dumps (a dump holds pi's memory, keys included).
+export NODE_OPTIONS="--disable-sigusr1"
+ulimit -Sc 0 2>/dev/null || true
+ulimit -Hc 0 2>/dev/null || true
 
 # The extensions are what gate bash. They auto-load from the agent dir, so
 # make sure the link is there (a fresh PI_CODING_AGENT_DIR won't have it)
@@ -87,7 +133,7 @@ mkdir -p "${AGENT_DIR}/extensions"
 if [[ "${PI_NOSANDBOX:-}" == 1 ]]; then
     echo "pi: ⚠️  PI_NOSANDBOX=1 — running WITHOUT the sandbox; the classifier is the only guard." >&2
     PI_SECRETS_FD=3 PI_CODE_DIR="$PI_CODE_DIR" PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0 \
-        exec "$PI_BIN" "$@" 3<<<"$KEYS"
+        PI_MEMORY_READONLY=0 exec "$PI_BIN" "$@" 3<<<"$KEYS"
 fi
 
 if ! command -v bwrap >/dev/null 2>&1; then
@@ -193,6 +239,30 @@ _cc_projects="$(readlink -f "${HOME}/.claude/projects" 2>/dev/null)"
 [[ -d "$_cc_projects" ]] && args+=(--ro-bind "$_cc_projects" "$_cc_projects")
 # Per-user runtime sockets (systemd user bus, gpg-agent, forwarded agents).
 hide_dir "/run/user/$(id -u)"
+# Crash reports and core dumps of earlier processes (apport, systemd-coredump).
+for d in /var/crash /var/lib/apport/coredump /var/lib/systemd/coredump; do hide_dir "$d"; done
+
+# Project memory (extensions/memory.ts): only this project's folder under
+# ~/.local/share/pi-memory is writable, and only in a project session (a
+# read-only session gets it read-only). The project is the git root shared by
+# worktrees, else $PROJECT; the slug (per byte, hence LC_ALL=C) matches
+# memory-core.ts. Notes are signed, so a file written here by anything but
+# remember is ignored. Claude Code's guard hook keeps Claude out.
+memory_slug() {
+    local LC_ALL=C p="$1" s
+    s="${p//[^A-Za-z0-9]/-}"
+    (( ${#s} <= 200 )) || s="${s:0:180}-$(printf '%s' "$p" | sha1sum | cut -c1-10)"
+    printf '%s' "$s"
+}
+_common="$(git -C "$PWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [[ "$(basename "${_common:-x}")" == .git ]]; then _mem_proj="$(readlink -f "$(dirname "$_common")")"; else _mem_proj="$PROJECT"; fi
+MEMORY_DIR="${HOME}/.local/share/pi-memory/$(memory_slug "$_mem_proj")"
+mkdir -p "$MEMORY_DIR" && chmod 700 "${HOME}/.local/share/pi-memory"
+if [[ "$RW_PROJECT" == 1 ]]; then
+    args+=(--bind "$MEMORY_DIR" "$MEMORY_DIR")
+else
+    args+=(--ro-bind "$MEMORY_DIR" "$MEMORY_DIR")
+fi
 
 # pi's own state. The agent dir gets a throwaway overlay: pi can write and
 # lock its config freely in-session, but every write lands in a tmpfs that is
@@ -233,7 +303,7 @@ for v in HOME USER LOGNAME SHELL PATH LANG LANGUAGE LC_ALL LC_CTYPE TERM \
          COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION TMUX TMUX_PANE EDITOR \
          VISUAL TZ DOCKER_HOST NO_COLOR PI_CODING_AGENT_DIR PI_LOCAL_READONLY PI_LOCAL_POLICY \
          PI_ADVISOR_SWAP_COOLDOWN_S PI_CLASSIFIER_DEADLINE_MS PI_ARBITER_URL \
-         PI_ARBITER_CTX; do
+         PI_ARBITER_CTX PI_CLAUDE_MEMORY PI_MEMORY_CONFIRM; do
     [[ -n "${!v:-}" ]] && args+=(--setenv "$v" "${!v}")
 done
 args+=(
@@ -241,6 +311,9 @@ args+=(
     --setenv PI_CODE_DIR "$PI_CODE_DIR"
     --setenv PI_PROJECT_DIR "$([[ "$RW_PROJECT" == 1 ]] && echo "$PROJECT" || echo "none — read-only session")"
     --setenv PI_SECRETS_FD 3
+    --setenv NODE_OPTIONS "--disable-sigusr1"
+    --setenv PI_MEMORY_DIR "$MEMORY_DIR"
+    --setenv PI_MEMORY_READONLY "$([[ "$RW_PROJECT" == 1 ]] && echo 0 || echo 1)"
     --setenv PI_SKIP_VERSION_CHECK 1
     --setenv PI_TELEMETRY 0
     --chdir "$PWD"

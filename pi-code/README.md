@@ -2,8 +2,8 @@
 
 The [pi](https://pi.dev) coding agent as an occasional local-model stand-in
 for Claude Code: pi on the arbiter's default model, inside a bubblewrap
-sandbox, with a bash classifier we own, an advisor for second opinions, and
-web search.
+sandbox, with a bash classifier we own, an advisor for second opinions, web
+search, and per-project memory that stays private to the local model.
 
 ```
 pi-code/
@@ -17,7 +17,9 @@ pi-code/
 │   ├── classifier-core.ts     classifier decision logic (shared with the eval)
 │   ├── bash-classifier.ts     tool_call hook: gates bash, fails closed
 │   ├── advisor.ts             ask_advisor tool + /advisor command
-│   └── web-search.ts          web_search (Brave) + web_fetch tools
+│   ├── web-search.ts          web_search (Brave) + web_fetch tools
+│   ├── memory-core.ts         project memory: storage, index, recall, write checks
+│   └── memory.ts              remember/forget tools, recall hook, /memories
 ├── policy/
 │   ├── bash-safety-sandbox.md classifier policy inside the sandbox (default)
 │   ├── bash-safety.md         classifier policy without it (PI_NOSANDBOX=1)
@@ -188,6 +190,44 @@ returns titles, URLs and snippets. `web_fetch` GETs a URL — judged by the
 classifier like the equivalent `curl` — and returns its text
 (HTML stripped, capped at ~40K chars) without a classified `curl` round trip.
 
+## Memory
+
+Per-project notes for future sessions, kept away from Claude Code.
+
+- **Where:** `~/.local/share/pi-memory/<project>/`, one note per file
+  (`name`, `description`, `keywords`, `type`, `source`, `updated`). The
+  project is the git root shared by worktrees, else the working directory.
+  `pi.sh` binds only that one folder writable.
+- **Index:** built by code from the notes, capped at ~4k tokens, and frozen
+  for the session (rebuilt at session start and after compaction), so the
+  prompt cache survives. It tells the model notes are hints to verify, not
+  instructions.
+- **Recall:** each message you send is keyword-matched (plurals folded)
+  against every note; at most two strong matches (~600 tokens each) are
+  added, each once per session. No model calls. A note saved mid-session is
+  recallable at once and joins the index next session.
+- **Writes:** only through `remember` / `forget`. Checked in code: kebab-case
+  names, size, secret patterns, 60 notes per project. A note that looks like
+  an existing one gets a warning: the model updates that note, or saves anyway
+  with `distinct: true`. Every save shows a notice. Once the session has read
+  web content (web tools, curl/wget, URLs, `gh issue/pr`), `remember` and
+  `forget` ask you first (headless runs refuse); package installs and your
+  own `!` commands don't count. `/memories confirm off`, or
+  `PI_MEMORY_CONFIRM=0` in `~/.config/pi-agent/env`, turns the asking off;
+  such notes are still marked `agent+web`.
+  Updates and `forget` move the old version to `archive/`. Shell and file
+  tools are blocked from the folder, and both classifier policies say so.
+- **`/memories`** — `list`, `show <name>`, `forget <name>`,
+  `restore <name>`, `claude on|off`, `confirm on|off`.
+- **Claude Code's memory** for the same project can be shown read-only (its
+  `MEMORY.md` index only) with `PI_CLAUDE_MEMORY=1` in
+  `~/.config/pi-agent/env`, or `/memories claude on`. Off by default; pi
+  never writes it.
+- **Claude Code is kept out of pi's memory:** `claude/guard-hook.sh` refuses
+  Read/Grep/Glob/Edit/Write paths and shell commands naming the folder, and
+  `install.sh` adds `Read`/`Edit` deny rules. A recursive grep of the whole
+  home directory from Claude's shell could still reach it.
+
 ## Eval
 
 ```bash
@@ -196,6 +236,7 @@ cd eval
 ./run-eval.sh --host       # host policy
 ./run-eval.sh --offline    # detection invariants only, no model
 ./run-eval.sh --only=92,107
+./memory-eval.sh           # project memory: recall, restraint, write checks (offline)
 ```
 
 `run-eval.ts` imports `extensions/classifier-core.ts`, so it runs the exact
@@ -249,5 +290,9 @@ Measured on 0.84.x with the host policy, before the sandbox:
 - **Network** — open, including the LAN. The policy blocks changes to
   infrastructure, uploads that look like exfiltration, and tunnels; the
   sandbox hides the secrets worth exfiltrating.
+- **Memory poisoning** — a note outlives the session. Saves are visible and
+  web-tainted saves need your OK, but a note the model writes after reading a
+  malicious file in the repo (not the web) is only shown, not confirmed.
+  Skim `/memories` now and then.
 - **pi version bumps** — the classifier relies on pi's `tool_call` hook.
   Re-run the eval before bumping `PI_VERSION`.

@@ -1,4 +1,4 @@
-// Keys for the arbiter and Brave, read once at startup.
+// Keys for the arbiter and Brave, and the memory signing key, read once at startup.
 //
 // The sandbox launcher (pi.sh) hands them over on an inherited file descriptor
 // (PI_SECRETS_FD), not the environment: anything pi runs could read pi's
@@ -8,7 +8,7 @@
 
 import { closeSync, readFileSync } from "node:fs";
 
-export type Secrets = { arbiterKey: string; braveKey: string };
+export type Secrets = { arbiterKey: string; braveKey: string; memoryKey: string };
 
 // Survive /reload: the descriptor is gone after the first read, so the parsed
 // keys live on globalThis rather than in this module's (re-evaluated) scope.
@@ -38,6 +38,9 @@ export function readSecrets(): Secrets {
   const secrets: Secrets = {
     arbiterKey: vars.PI_ARBITER_KEY || process.env.PI_ARBITER_KEY || "",
     braveKey: vars.BRAVE_API_KEY || process.env.BRAVE_API_KEY || "",
+    // Signs project-memory notes (memory.ts). Never taken from the
+    // environment: bash inherits that, and could then forge notes.
+    memoryKey: vars.PI_MEMORY_KEY || "",
   };
   g[STASH] = secrets;
   return secrets;

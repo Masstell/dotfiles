@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Claude Code PreToolUse guard: blocks destructive operations against protected paths.
-# Usage: registered in ~/.claude/settings.json by install.sh for two matchers:
+# Usage: registered in ~/.claude/settings.json by install.sh for three matchers:
 #   Bash                             — inspects tool_input.command + cwd
 #   Write|Edit|MultiEdit|NotebookEdit — inspects tool_input.file_path / notebook_path
+#   Read|Grep|Glob                    — only the pi-memory check below
 #
 # Written after the 2026-08-23 incident (an agent's `rm -rf /mnt/raid*` destroyed part
 # of a 15 TB array over a rw CIFS mount; see ~/raid-recovery-20260823/INCIDENT-REPORT.md).
@@ -35,6 +36,25 @@ printf '%s' "$input" | jq -e . >/dev/null 2>&1 || deny "hook input is not valid 
 j() { printf '%s' "$input" | jq -r "$1" 2>/dev/null; }
 
 tool="$(j '.tool_name // empty')"
+
+# pi's project memory (~/.local/share/pi-memory) belongs to the local model:
+# what pi learns stays off Anthropic's servers, so Claude Code neither reads
+# nor writes it. Checked: file-tool paths, Grep's path and glob, Glob's
+# pattern, and shell commands, for path-shaped mentions only (the folder
+# itself, a glob reaching it, or `cd` into it). File content, Grep's search
+# pattern and prose in commit messages are not checked, so Claude can still
+# work on pi's own source. Best effort: a recursive search of the whole home
+# directory can still reach it; settings.json also carries Read/Edit deny
+# rules for the built-in file tools.
+pi_paths="$(j '[.tool_input.file_path, .tool_input.notebook_path, .tool_input.path, .tool_input.glob,
+                (if .tool_name == "Glob" then .tool_input.pattern else null end)]
+               | map(select(. != null) | tostring) | join("\n")')"
+pi_cmd="$(j '.tool_input.command // empty')"
+if printf '%s' "$pi_paths" | grep -q 'pi-mem' \
+    || printf '%s' "$pi_cmd" | grep -Eq 'share/pi-m|pi-mem[a-z*?]*/|(^|[;&|[:space:]])cd[[:space:]][^;&|]*pi-mem'; then
+    printf 'claude-guard: BLOCKED: %s touches ~/.local/share/pi-memory.\nThat is pi'"'"'s private project memory for the local model; Claude Code does not read or change it. Ask the user if you need something from it.\n' "${tool:-tool}" >&2
+    exit "$BLOCK"
+fi
 
 # Protected path prefixes: built-in + machine-local additions.
 protected=("/mnt/raid")

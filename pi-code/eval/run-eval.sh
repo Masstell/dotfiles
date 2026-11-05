@@ -16,7 +16,7 @@ set -euo pipefail
 
 _HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PI_AGENT_HOME="${HOME}/.local/share/pi-agent/current"
-JITI="$(find "${PI_AGENT_HOME}/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/jiti/lib" -name 'jiti-cli.mjs' 2>/dev/null | head -1)"
+JITI="$(find "${PI_AGENT_HOME}/lib/node_modules/jiti/lib" -name 'jiti-cli.mjs' 2>/dev/null | head -1)"
 [[ -n "$JITI" ]] || { echo "run-eval: pi not installed under ${PI_AGENT_HOME} (jiti not found) — run install.sh" >&2; exit 2; }
 
 PI_ARBITER_KEY="$(

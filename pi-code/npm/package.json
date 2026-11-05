@@ -1,0 +1,8 @@
+{
+  "name": "homelab-pi",
+  "private": true,
+  "description": "pi pinned with its full dependency tree; package-lock.json is what install.sh installs (npm ci) and what vulnwatch's Trivy scan reads.",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0"
+  }
+}

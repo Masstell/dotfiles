@@ -293,7 +293,9 @@ git_fingerprint() {
     [[ -e "$_git" ]] || { echo none; return; }
     { stat -c '%i' "$_git"; [[ -f "$_git" ]] && cat "$_git"
       cat "$_git/config" "$_git/commondir" 2>/dev/null
-      ls -la --time-style=+%s "$_git/hooks" 2>/dev/null
+      # -A, not -a: ".." is .git itself, whose mtime changes on every git
+      # index lock, which made plain `git status` look like tampering.
+      ls -lA --time-style=+%s "$_git/hooks" 2>/dev/null
     } | sha256sum
 }
 

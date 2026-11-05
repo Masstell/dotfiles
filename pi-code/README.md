@@ -4,7 +4,8 @@ The [pi](https://pi.dev) coding agent as an occasional local-model stand-in
 for Claude Code: pi on the arbiter's default model, inside a bubblewrap
 sandbox, with a bash classifier we own, an advisor for second opinions, web
 search, per-project memory that stays private to the local model, and
-workflow tools: lint feedback, `ask_user`, plan mode and parallel subagents.
+workflow tools: lint feedback, `ask_user`, plan mode, parallel subagents,
+and scheduling: in-session jobs and unattended routines that report to Matrix.
 
 ```
 pi-code/
@@ -24,7 +25,14 @@ pi-code/
 │   ├── lint.ts                after edit/write: syntax and lint problems join the result
 │   ├── ask-user.ts            ask_user tool (a question with choices)
 │   ├── plan-mode.ts           /plan: investigate and plan, no file changes
-│   └── subagent.ts            subagent tool: parallel workers with their own context
+│   ├── subagent.ts            subagent tool: parallel workers with their own context
+│   ├── schedule.ts            cron_create / schedule_wakeup: prompts on a schedule in this session
+│   ├── routines.ts            routine_create/list/delete/run, /routines; notify inside a run
+│   ├── routines-core.ts       routine files: validation, signing, state, the run prompt
+│   └── cron.ts                5-field cron in a named time zone (shared with the runner)
+├── routines/
+│   ├── runner.ts              the pi-routines service: fires due routines, posts to Matrix
+│   └── pi-routines.sh         starts it with pi's TypeScript loader (systemd, Ansible)
 ├── policy/
 │   ├── bash-safety-sandbox.md classifier policy inside the sandbox (default)
 │   ├── bash-safety.md         classifier policy without it (PI_NOSANDBOX=1)
@@ -264,6 +272,76 @@ Per-project notes for future sessions, kept away from Claude Code.
   - Web content a worker read counts as web content for this session's memory
     confirmation. A worker times out after 20 minutes (`PI_SUBAGENT_TIMEOUT_S`).
 
+## Scheduling and routines
+
+Like Claude Code, pi can do things on a schedule when you ask in plain words;
+there is no command to remember.
+
+**In this session** (`schedule.ts`), for "check the build every 5 minutes"
+or "look again in 10 minutes":
+
+- `cron_create`: a prompt on a 5-field cron schedule, recurring or once, read
+  in your time zone (`PI_TZ`, from Ansible; the VMs run UTC).
+- `schedule_wakeup`: pi checks back on something itself after 60 s to 1 h;
+  one pending wake-up at a time.
+- `cron_list` / `cron_delete`, `/scheduled` (`/scheduled clear`), and a ⏰
+  status line with the next run.
+- Same rules as Claude Code: a job fires only while pi is idle, as a new
+  message; recurring jobs run a fixed per-job delay late (up to half their
+  period, at most 30 min) and expire after 7 days (one final run, then gone);
+  jobs end with the session (they survive `/reload`). Interactive only.
+
+**From now on, unattended** (`routines.ts`, `routines/`), for "check every
+10 minutes that the downloads VPN is up":
+
+- `routine_create` proposes a routine (name, cron, prompt, start directory,
+  timeout). You approve it on screen; only then is it saved, signed, to
+  `~/.local/share/pi-routines/<name>.json`.
+- The `pi-routines` service (Ansible `vm_base`, every pi VM) checks each
+  minute and starts due routines through the normal launcher: each run is a
+  fresh pi in the sandbox, bash judged by the classifier, keys on fd 3. At
+  most 2 run at once (`PI_ROUTINES_MAX`); a routine never overlaps itself;
+  a run is stopped at its timeout; minutes missed while the VM was down are
+  not made up. It survives pi restarts and reboots, and restarts itself after
+  a dotfiles update changes its code.
+- Each run is told what the previous run found, so it can tell "newly broken"
+  from "still broken". It calls `notify` only when something needs you
+  (broken, recovered, or it couldn't check); the service posts that to the
+  "pi routines" Matrix room as @pi. A run that fails to finish (timeout,
+  arbiter down, pi error) is posted once, and again when runs work again.
+  Silence means all is as expected.
+- `routine_list` (or `/routines`) shows each routine's schedule, next run and
+  last result; `routine_run` / `/routines run <name>` runs one now;
+  `routine_delete` / `/routines delete <name>` stops it.
+- Around DST changes it behaves like cron: a job pinned to an hour runs once
+  when clocks fall back, and one skipped when they spring forward runs right
+  after the gap.
+- A run may fix what it finds (it has the same permissions as any pi),
+  but only routines you approved run at all:
+  - Only an interactive session can create, change or delete routines, each
+    after your yes on screen. Print-mode runs, subagents and routine runs
+    can't; inside a routine run the routines folder is read-only.
+  - Routine files are HMAC-signed with `~/.config/pi-agent/routine.key`
+    (hidden from the sandbox, handed to pi on fd 3, not to routine runs).
+    The runner ignores unsigned files, and keeps a ledger
+    (`~/.local/state/pi-routines/ledger.json`) so an older signed version
+    written back, or a deleted routine restored, is refused too.
+  - The room hears every change: a routine added, changed or deleted, and
+    files refused (at most hourly). After you approve one, its "added" or
+    "changed" message is your confirmation the service took that version.
+  - A run's writable project is exactly the directory you approved (resolved
+    at approval); pi.sh refuses to start it anywhere else and does no git
+    discovery for it. No hidden folder in home (`~/.local`, `~/.config` ...)
+    is ever a writable project.
+  - Limits: 5 notify messages per run, 6 posts per routine per hour, a run
+    at most every 5 minutes on request; the previous run's output reaches the
+    next run capped and quoted as data.
+  - The Matrix login (`~/.config/pi-agent/matrix.env`, from Ansible) is
+    read only by the service, outside the sandbox. Failure and recovery
+    messages wait in an outbox until Matrix takes them.
+- Logs: `journalctl -u pi-routines`. State per routine:
+  `~/.local/state/pi-routines/<name>.json` (read-only inside the sandbox).
+
 ## Eval
 
 ```bash
@@ -274,6 +352,7 @@ cd eval
 ./run-eval.sh --only=92,107
 ./memory-eval.sh           # project memory: recall, restraint, write checks (offline)
 ./workflow-eval.sh         # plan-mode allowlist, lint on real files (offline)
+./routines-eval.sh         # cron, scheduling, routine signing, the runner end to end (offline)
 ```
 
 `run-eval.ts` imports `extensions/classifier-core.ts`, so it runs the exact

@@ -80,19 +80,20 @@ read_env() {
             # shellcheck disable=SC1090
             [[ -f "$f" ]] && { set -a; source "$f"; set +a; }
         done
-        printf 'PI_ARBITER_KEY=%s\nBRAVE_API_KEY=%s\nPI_ARBITER_URL=%s\nPI_CLAUDE_MEMORY=%s\nPI_MEMORY_CONFIRM=%s\n' \
+        printf 'PI_ARBITER_KEY=%s\nBRAVE_API_KEY=%s\nPI_ARBITER_URL=%s\nPI_CLAUDE_MEMORY=%s\nPI_MEMORY_CONFIRM=%s\nPI_TZ=%s\n' \
             "${PI_ARBITER_KEY:-${OPENCODE_ARBITER_KEY:-${LLAMA_API_KEY:-}}}" \
             "${BRAVE_API_KEY:-}" \
             "${PI_ARBITER_URL:-${OPENCODE_LLM_URL:-${LLAMA_URL:-}}}" \
             "${PI_CLAUDE_MEMORY:-}" \
-            "${PI_MEMORY_CONFIRM:-}"
+            "${PI_MEMORY_CONFIRM:-}" \
+            "${PI_TZ:-}"
     )
 }
 _env="$(read_env)"
 KEYS="$(grep -E '^(PI_ARBITER_KEY|BRAVE_API_KEY)=' <<<"$_env")"
 _url="$(sed -n 's/^PI_ARBITER_URL=//p' <<<"$_env")"
 [[ -n "$_url" && -z "${PI_ARBITER_URL:-}" ]] && export PI_ARBITER_URL="$_url"
-for _v in PI_CLAUDE_MEMORY PI_MEMORY_CONFIRM; do
+for _v in PI_CLAUDE_MEMORY PI_MEMORY_CONFIRM PI_TZ; do
     _cm="$(sed -n "s/^${_v}=//p" <<<"$_env")"
     [[ -n "$_cm" && -z "${!_v:-}" ]] && export "$_v=$_cm"
 done
@@ -106,7 +107,7 @@ fi
 # fd 3 with the other keys, so nothing pi runs can read it or forge a note.
 MEMORY_KEY_FILE="${HOME}/.config/pi-agent/memory.key"
 # An empty key file (an interrupted first write) is replaced, not kept forever.
-[[ -f "$MEMORY_KEY_FILE" && ! -s "$MEMORY_KEY_FILE" ]] && rm -f "$MEMORY_KEY_FILE"
+[[ -f "$MEMORY_KEY_FILE" && ! -s "$MEMORY_KEY_FILE" ]] && (( $(date +%s) - $(stat -c %Y "$MEMORY_KEY_FILE") > 10 )) && rm -f "$MEMORY_KEY_FILE"
 if [[ ! -s "$MEMORY_KEY_FILE" ]]; then
     [[ -d "${MEMORY_KEY_FILE%/*}" ]] || mkdir -m 700 -p "${MEMORY_KEY_FILE%/*}"
     # noclobber: two first launches at once must not each write a key.
@@ -114,6 +115,16 @@ if [[ ! -s "$MEMORY_KEY_FILE" ]]; then
      head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$MEMORY_KEY_FILE") 2>/dev/null || true
 fi
 KEYS+=$'\n'"PI_MEMORY_KEY=$(<"$MEMORY_KEY_FILE")"
+# Routines are signed the same way, with their own key (extensions/routines-core.ts);
+# the pi-routines runner reads this file directly to verify them.
+ROUTINE_KEY_FILE="${HOME}/.config/pi-agent/routine.key"
+[[ -f "$ROUTINE_KEY_FILE" && ! -s "$ROUTINE_KEY_FILE" ]] && (( $(date +%s) - $(stat -c %Y "$ROUTINE_KEY_FILE") > 10 )) && rm -f "$ROUTINE_KEY_FILE"
+if [[ ! -s "$ROUTINE_KEY_FILE" ]]; then
+    (umask 077; set -o noclobber
+     head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$ROUTINE_KEY_FILE") 2>/dev/null || true
+fi
+# A routine run can't manage routines, so it doesn't get the key.
+[[ -z "${PI_ROUTINE:-}" ]] && KEYS+=$'\n'"PI_ROUTINE_KEY=$(<"$ROUTINE_KEY_FILE")"
 
 # Nothing inside may get code into pi's process, where the keys live:
 # - Node opens its inspector (a code-execution port) on SIGUSR1, which any
@@ -143,8 +154,21 @@ if ! command -v bwrap >/dev/null 2>&1; then
 fi
 
 # --- Project -------------------------------------------------------------------
-PROJECT="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || pwd -P)"
 REAL_HOME="$(readlink -f "$HOME")"
+if [[ -n "${PI_ROUTINE:-}" ]]; then
+    # An unattended routine run: its writable project is exactly the directory
+    # the owner approved, resolved when it was approved. No git discovery
+    # (a .git planted or rewritten since — core.worktree — could point it
+    # anywhere), and a path that now resolves elsewhere (a swapped symlink)
+    # stops the run.
+    if [[ -z "${PI_ROUTINE_CWD:-}" || "$(pwd -P)" != "$PI_ROUTINE_CWD" ]]; then
+        echo "pi: routine ${PI_ROUTINE}: start directory is not the approved ${PI_ROUTINE_CWD:-(none)} (now $(pwd -P))" >&2
+        exit 1
+    fi
+    PROJECT="$PI_ROUTINE_CWD"
+else
+    PROJECT="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || pwd -P)"
+fi
 # Some starting points get a read-only session instead of a writable project:
 #   - $HOME or anything above it (incl. /): a writable home lets the agent
 #     edit ~/.bashrc, ~/.profile or user units, which run OUTSIDE the sandbox
@@ -155,6 +179,11 @@ if [[ "$PROJECT" == / || "$REAL_HOME/" == "$PROJECT/"* ]]; then
     RW_PROJECT=0
     echo "pi: started in ${PROJECT} — read-only session (nothing in home is writable)." >&2
     echo "    To start a new project: mkdir ~/<name> && cd ~/<name> && pi" >&2
+elif [[ "$PROJECT/" == "$REAL_HOME"/.* ]]; then
+    # ~/.local, ~/.config, ~/.ssh ...: what lives there runs outside the
+    # sandbox (~/.local/bin is on PATH, user units, shell config).
+    RW_PROJECT=0
+    echo "pi: ${PROJECT} is inside a hidden folder in home — read-only session." >&2
 elif [[ "$PROJECT/" == /mnt/* ]]; then
     RW_PROJECT=0
     echo "pi: ${PROJECT} is on the storage array — read-only session." >&2
@@ -255,13 +284,25 @@ memory_slug() {
     printf '%s' "$s"
 }
 _common="$(git -C "$PWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-if [[ "$(basename "${_common:-x}")" == .git ]]; then _mem_proj="$(readlink -f "$(dirname "$_common")")"; else _mem_proj="$PROJECT"; fi
+if [[ -z "${PI_ROUTINE:-}" && "$(basename "${_common:-x}")" == .git ]]; then _mem_proj="$(readlink -f "$(dirname "$_common")")"; else _mem_proj="$PROJECT"; fi
 MEMORY_DIR="${HOME}/.local/share/pi-memory/$(memory_slug "$_mem_proj")"
 mkdir -p "$MEMORY_DIR" && chmod 700 "${HOME}/.local/share/pi-memory"
 if [[ "$RW_PROJECT" == 1 ]]; then
     args+=(--bind "$MEMORY_DIR" "$MEMORY_DIR")
 else
     args+=(--ro-bind "$MEMORY_DIR" "$MEMORY_DIR")
+fi
+
+# Routines (extensions/routines.ts): writable, so an approved routine can be
+# saved from any interactive session; read-only inside a routine run. Files are signed, so one written here by anything
+# but routine_create is ignored by the runner; its state lives in
+# ~/.local/state/pi-routines, read-only here.
+ROUTINES_DIR="${HOME}/.local/share/pi-routines"
+mkdir -p -m 700 "$ROUTINES_DIR"
+if [[ -n "${PI_ROUTINE:-}" ]]; then
+    args+=(--ro-bind "$ROUTINES_DIR" "$ROUTINES_DIR")   # a run can't queue or plant runs
+else
+    args+=(--bind "$ROUTINES_DIR" "$ROUTINES_DIR")
 fi
 
 # pi's own state. The agent dir gets a throwaway overlay: pi can write and
@@ -300,13 +341,16 @@ git_fingerprint() {
 }
 
 # --- Environment: rebuilt from an allowlist -------------------------------------
+# The pi-routines service runs with a PATH that leaves out ~/.local/bin;
+# inside the sandbox (where it is read-only) routine runs get it like any pi.
+if [[ -n "${PI_ROUTINE:-}" && ":$PATH:" != *":$HOME/.local/bin:"* ]]; then PATH="$HOME/.local/bin:$PATH"; fi
 args+=(--clearenv)
 for v in HOME USER LOGNAME SHELL PATH LANG LANGUAGE LC_ALL LC_CTYPE TERM \
          COLORTERM TERM_PROGRAM TERM_PROGRAM_VERSION TMUX TMUX_PANE EDITOR \
          VISUAL TZ DOCKER_HOST NO_COLOR PI_CODING_AGENT_DIR PI_LOCAL_READONLY PI_LOCAL_POLICY \
          PI_ADVISOR_SWAP_COOLDOWN_S PI_CLASSIFIER_DEADLINE_MS PI_ARBITER_URL \
          PI_ARBITER_CTX PI_CLAUDE_MEMORY PI_MEMORY_CONFIRM PI_LINT PI_SUBAGENT_MAX \
-         PI_SUBAGENT_TIMEOUT_S; do
+         PI_SUBAGENT_TIMEOUT_S PI_TZ PI_ROUTINE; do
     [[ -n "${!v:-}" ]] && args+=(--setenv "$v" "${!v}")
 done
 args+=(
